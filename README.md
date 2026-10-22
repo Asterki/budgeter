@@ -32,12 +32,19 @@ IndexedDB. The only server-side piece is the reminder delivery endpoint.
 
 ## Getting started
 
-This project uses **pnpm**.
+This project uses **pnpm**, pinned in `package.json` (`packageManager`) so local
+builds and Vercel's build use the identical version.
 
 ```bash
 pnpm install
 pnpm dev           # http://localhost:5173
 ```
+
+> Do not run `npm install` here. npm's dependency walker traverses pnpm's
+> `node_modules/.pnpm` store, hits a package that depends on `workspace:*`, and
+> aborts with `EUNSUPPORTEDPROTOCOL`. Vercel does the same thing if you force an
+> install command, which is why `vercel.json` leaves install and build commands
+> to Vercel's own package-manager detection.
 
 The dev server also mounts the serverless endpoint at `/api/check-reminders`, so
 you can exercise the cron logic locally:
