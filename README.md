@@ -78,14 +78,56 @@ curl "http://localhost:5173/api/check-reminders?dry=1"
 3. Deploy. `vercel.json` registers the cron and the SPA rewrite.
 
 > `.env.local` is git-ignored, so the private key never leaves your machine —
-> but that also means Vercel needs the values copied across manually.
+> which also means Vercel needs the values copied across manually.
 
-### Notes on the cron schedule
+### The cron schedule, plan by plan
 
-`* * * * *` requires a Vercel plan that allows per-minute crons. On plans limited
-to daily crons the endpoint still works — reminders simply fire on the next tick
-that the schedule allows. Reminders that have already passed are picked up by
-the grace window (5 minutes) or by the in-app watcher.
+Vercel restricts how often a project may schedule a cron job:
+
+| Plan | Minimum interval | Precision | Status |
+| --- | --- | --- | --- |
+| **Hobby** | **once per day** | per-hour (±59 min) | ✅ what is committed |
+| Pro | once per minute | per-minute | switch the schedule to `* * * * *` |
+| Enterprise | once per minute | per-minute | switch the schedule to `* * * * *` |
+
+`* * * * *` **fails the Hobby deployment** with *"Hobby accounts are limited to
+daily cron jobs. This cron expression would run more than once per day."* — so
+the committed schedule is:
+
+```json
+{ "crons": [{ "path": "/api/check-reminders", "schedule": "0 13 * * *" }] }
+```
+
+`0 13 * * *` is 13:00 UTC, i.e. **07:00 in Honduras (UTC−6)**. Crons are always
+UTC; change the hour in `vercel.json` to match your own morning.
+
+The endpoint adapts to whichever cadence it is given. It delivers every reminder
+that has come due since the previous tick, up to 24 hours late:
+
+- on **Pro / an external per-minute trigger** → fires on the minute;
+- on **Hobby's daily trigger** → one catch-up batch at the scheduled hour,
+  which reads as a morning agenda of everything that came due.
+
+Reminders older than 24 hours are dropped rather than delivered as stale noise.
+
+### Getting minute-accurate delivery on Hobby
+
+If the daily catch-up is not good enough on a Hobby budget, trigger the endpoint
+yourself from a free scheduler and drop the Vercel cron entirely:
+
+1. Add `CRON_SECRET` to the Vercel environment variables.
+2. Point any free scheduler (cron-job.org, Cloudflare Workers Cron Triggers, a
+   GitHub Actions scheduled workflow) at:
+
+   ```
+   https://<your-app>.vercel.app/api/check-reminders?secret=<CRON_SECRET>
+   ```
+
+   …or send `Authorization: Bearer <CRON_SECRET>`. Without `CRON_SECRET` set the
+   endpoint is open, which is fine for a single-user app but not recommended.
+
+Note that Vercel Cron cannot be scheduled more than once per day on Hobby, but
+nothing prevents *other* services from calling the same endpoint.
 
 ### Without a KV store
 

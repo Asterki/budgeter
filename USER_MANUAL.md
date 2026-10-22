@@ -192,11 +192,23 @@ Vercel, so they arrive even when Tasker is closed.
    `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or
    `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
 
-4. Redeploy. `vercel.json` already registers the cron:
+4. Redeploy. `vercel.json` already registers the cron — it is scheduled as
+   `0 13 * * *` (13:00 UTC / 07:00 in Honduras) because Vercel's **Hobby plan
+   allows a cron only once per day**. Change the hour in `vercel.json` to suit
+   your timezone.
 
-   ```json
-   { "crons": [{ "path": "/api/check-reminders", "schedule": "* * * * *" }] }
-   ```
+> **Plan limits.** Hobby = once per day, and Vercel may run it at any point
+> inside that hour (±59 min). Pro and Enterprise allow `* * * * *` (every
+> minute). On Hobby, reminders therefore arrive as a single morning catch-up
+> covering everything that came due in the previous 24 hours; anything older is
+> dropped as stale. While Tasker is open, the in-app watcher still fires
+> reminders on the minute, so the daily catch-up only matters for the
+> closed-app case.
+>
+> Want minute-accurate delivery on Hobby? Set `CRON_SECRET`, then point any free
+> scheduler (cron-job.org, Cloudflare Workers Cron Triggers, GitHub Actions) at
+> `https://your-app.vercel.app/api/check-reminders?secret=YOUR_CRON_SECRET` every
+> minute. The endpoint does not care who calls it.
 
 ### Per-device opt-in
 
@@ -205,7 +217,9 @@ Vercel, so they arrive even when Tasker is closed.
 3. Tasker registers `sw.js`, subscribes through `PushManager` with the VAPID
    public key, and stores the subscription in IndexedDB.
 4. It then mirrors your upcoming reminders to `/api/check-reminders`. The cron
-   job fires each reminder at its exact timestamp and marks it as reminded.
+   job fires each reminder at its timestamp and marks it as reminded; reminder
+   ids that were already delivered are remembered for seven days so a re-sync
+   can never produce a duplicate notification.
 
 If the browser denies permission, or no VAPID key is configured, the panel tells
 you exactly what to fix.
@@ -247,6 +261,8 @@ Keep the exported file somewhere safe — it is the only copy of your data.
 | --- | --- |
 | No notifications | Check the browser permission, then re-enable in Settings. |
 | “No VAPID public key configured” | Set `VITE_VAPID_PUBLIC_KEY` and redeploy. |
+| Deployment fails with “Hobby accounts are limited to daily cron jobs” | Use a once-per-day schedule such as `0 13 * * *`, or trigger `/api/check-reminders` from an external scheduler. |
+| Reminders arrive in one batch each morning | Expected on Hobby — the cron runs once per day. Upgrade to Pro or use an external per-minute trigger. |
 | Notifications stop after a while | Confirm the cron is registered in Vercel and that a KV store is configured. |
 | App shows stale content | Hard-reload once; the service worker updates on the next visit. |
 | Lost data | Import your most recent JSON export. |

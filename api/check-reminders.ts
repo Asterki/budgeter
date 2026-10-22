@@ -47,6 +47,25 @@ type ResponseLike = ServerResponse;
 
 const SUBSCRIPTION_KEY = 'tasker:subscription';
 const REMINDERS_KEY = 'tasker:reminders';
+const DELIVERED_KEY = 'tasker:delivered';
+
+/**
+ * Delivery window.
+ *
+ * Vercel Hobby only allows a once-per-day cron, while Pro allows every minute.
+ * Rather than keeping two code paths, the tick delivers every reminder that has
+ * come due since the previous tick:
+ *
+ *   - Pro / external per-minute trigger -> fires on the minute.
+ *   - Hobby daily trigger               -> catches up the last 24 hours at once.
+ *
+ * FORWARD_SLACK absorbs cron drift; CATCH_UP is the maximum lateness we will
+ * still notify about (older reminders are silently dropped as stale).
+ */
+const FORWARD_SLACK = 45_000;
+const CATCH_UP = 24 * 60 * 60 * 1000;
+/** How long delivered reminder ids are remembered, to prevent duplicates. */
+const DELIVERED_RETENTION = 7 * 24 * 60 * 60 * 1000;
 
 /** Fallback store used when no KV REST credentials are present. */
 const memoryStore = new Map<string, string>();
@@ -226,6 +245,36 @@ async function handleTick(res: ResponseLike, url: URL): Promise<void> {
 
   const subscription = await readJson<StoredSubscription>(SUBSCRIPTION_KEY);
   const reminders = (await readJson<StoredReminder[]>(REMINDERS_KEY)) ?? [];
+  const now = Date.now();
+
+  // Delivered ids are remembered so a client re-sync can never re-notify a task.
+  const storedDelivered = await readJson<Record<string, number>>(DELIVERED_KEY);
+  const freshDelivered: Record<string, number> = {};
+  for (const [id, at] of Object.entries(storedDelivered ?? {})) {
+    if (now - at < DELIVERED_RETENTION) freshDelivered[id] = at;
+  }
+
+  const due = reminders.filter(
+    (reminder) =>
+      !reminder.sent &&
+      !freshDelivered[reminder.id] &&
+      reminder.timestamp <= now + FORWARD_SLACK &&
+      reminder.timestamp >= now - CATCH_UP,
+  );
+
+  // Diagnostics first, so `?dry=1` works before VAPID keys are configured.
+  if (dryRun) {
+    sendJson(res, 200, {
+      ok: true,
+      dryRun: true,
+      due,
+      pending: reminders.length,
+      hasSubscription: Boolean(subscription),
+      vapidConfigured: isVapidConfigured(),
+      storage: kvCredentials() ? 'kv' : 'memory',
+    });
+    return;
+  }
 
   if (!subscription) {
     sendJson(res, 200, { ok: true, delivered: 0, reason: 'no subscription registered' });
@@ -236,23 +285,13 @@ async function handleTick(res: ResponseLike, url: URL): Promise<void> {
     return;
   }
 
-  // A one-minute cron can drift slightly, so allow a 45s window either side.
-  const now = Date.now();
-  const due = reminders.filter(
-    (reminder) => !reminder.sent && reminder.timestamp <= now + 45_000 && reminder.timestamp >= now - 300_000,
-  );
-
-  if (dryRun) {
-    sendJson(res, 200, { ok: true, dryRun: true, due, pending: reminders.length });
-    return;
-  }
   if (due.length === 0) {
     sendJson(res, 200, { ok: true, delivered: 0, pending: reminders.length });
     return;
   }
 
   configureWebPush();
-  const delivered: string[] = [];
+  const deliveredIds: string[] = [];
   let subscriptionGone = false;
 
   for (const reminder of due) {
@@ -267,7 +306,8 @@ async function handleTick(res: ResponseLike, url: URL): Promise<void> {
         }),
       );
       reminder.sent = true;
-      delivered.push(reminder.id);
+      freshDelivered[reminder.id] = now;
+      deliveredIds.push(reminder.id);
     } catch (error) {
       const statusCode = (error as { statusCode?: number }).statusCode;
       if (statusCode === 404 || statusCode === 410) {
@@ -278,13 +318,17 @@ async function handleTick(res: ResponseLike, url: URL): Promise<void> {
     }
   }
 
-  const remaining = reminders.filter((reminder) => !reminder.sent && reminder.timestamp > now - 300_000);
+  // Keep future work and anything still inside the catch-up window for a retry.
+  const remaining = reminders.filter(
+    (reminder) => !reminder.sent && reminder.timestamp > now - CATCH_UP,
+  );
   await storeSet(REMINDERS_KEY, JSON.stringify(remaining));
+  await storeSet(DELIVERED_KEY, JSON.stringify(freshDelivered));
 
   sendJson(res, 200, {
     ok: true,
-    delivered: delivered.length,
-    deliveredIds: delivered,
+    delivered: deliveredIds.length,
+    deliveredIds,
     subscriptionGone,
     pending: remaining.length,
   });
@@ -313,6 +357,7 @@ export default async function handler(req: RequestLike, res: ResponseLike): Prom
 
     if (req.method === 'DELETE') {
       await storeSet(REMINDERS_KEY, '[]');
+      await storeSet(DELIVERED_KEY, '{}');
       sendJson(res, 200, { ok: true, cleared: true });
       return;
     }
