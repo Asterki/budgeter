@@ -2,9 +2,9 @@
  * The completion feedback layer.
  *
  * Ticking a task fires an immediate burst at the checkbox (particles, a ripple
- * and a floating "+XP"), plus optional haptics and a short synthesised chime.
- * Level-ups and milestones arrive a moment later as a toast, so the reward is
- * layered rather than all at once.
+ * and a floating "+XP ×combo"), plus haptics and an optional chime. A moment
+ * later the rewards land as toasts — level-ups, achievements and daily
+ * milestones — and an Undo pill appears at the bottom so a mis-tap is harmless.
  *
  * The layer is fixed and pointer-events:none, so celebrations survive the task
  * row unmounting the instant it is completed.
@@ -18,7 +18,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { CompletionOutcome } from '../domain/progress';
+import type { CompletionOutcome, CompletionUndo } from '../domain/progress';
 import { useTasker } from '../state/store';
 
 type Tone = 'normal' | 'checklist' | 'level';
@@ -28,12 +28,18 @@ export interface Point {
   y: number;
 }
 
+export interface Gain {
+  xp: number;
+  multiplier: number;
+}
+
 interface Particle {
   tx: number;
   ty: number;
   delay: number;
   color: string;
   size: number;
+  round: boolean;
 }
 
 interface Burst {
@@ -41,6 +47,7 @@ interface Burst {
   x: number;
   y: number;
   xp: number;
+  multiplier: number;
   tone: Tone;
   particles: Particle[];
 }
@@ -53,10 +60,15 @@ interface Toast {
   tone: Tone;
 }
 
+interface PendingUndo {
+  id: number;
+  undo: CompletionUndo;
+}
+
 interface CelebrationApi {
   /** Immediate feedback at a screen point. */
-  celebrate: (point: Point, xp: number, tone?: Tone) => void;
-  /** Post-commit rewards: level ups and daily milestones. */
+  celebrate: (point: Point, gain: Gain, tone?: Tone) => void;
+  /** Post-commit rewards: levels, achievements, milestones and Undo. */
   announce: (outcome: CompletionOutcome, point?: Point) => void;
   notify: (toast: { icon?: string; title: string; subtitle?: string }) => void;
 }
@@ -66,10 +78,16 @@ const CelebrationContext = createContext<CelebrationApi | null>(null);
 const TONE_COLORS: Record<Tone, string[]> = {
   normal: ['#263BAA', '#8FA8BE', '#4C8C8C', '#6E839A'],
   checklist: ['#3F7A5E', '#8FA8BE', '#263BAA', '#9E7B3F'],
-  level: ['#C07F2E', '#263BAA', '#3F7A5E', '#8C6E9E', '#C2453D'],
+  level: ['#C07F2E', '#263BAA', '#3F7A5E', '#8C6E9E', '#C2453D', '#263BAA'],
 };
 
-/** Chime notes, chosen per tone. */
+/** Haptic patterns (ms on, ms off…), scaled by how big the moment is. */
+const TONE_HAPTICS: Record<Tone, number | number[]> = {
+  normal: 14,
+  checklist: [12, 28, 12, 28, 22],
+  level: [16, 40, 16, 40, 16, 40, 48],
+};
+
 const TONE_NOTES: Record<Tone, number[]> = {
   normal: [880, 1174.66],
   checklist: [659.25, 880, 1318.51],
@@ -106,11 +124,11 @@ function playChime(tone: Tone): void {
   }
 }
 
-function vibrate(tone: Tone): void {
+function haptic(tone: Tone): void {
   try {
-    navigator.vibrate?.(tone === 'normal' ? 12 : [10, 40, 18]);
+    navigator.vibrate?.(TONE_HAPTICS[tone]);
   } catch {
-    // Unsupported on desktop — ignore.
+    // Unsupported (most desktops) — ignore.
   }
 }
 
@@ -119,10 +137,12 @@ function prefersReducedMotion(): boolean {
 }
 
 export function CelebrationProvider({ children }: { children: ReactNode }) {
-  const { settings, tasks } = useTasker();
+  const { settings, undoCompletion } = useTasker();
   const [bursts, setBursts] = useState<Burst[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [pending, setPending] = useState<PendingUndo | null>(null);
   const counter = useRef(0);
+  const undoTimer = useRef<number | null>(null);
 
   const nextId = () => {
     counter.current += 1;
@@ -130,36 +150,47 @@ export function CelebrationProvider({ children }: { children: ReactNode }) {
   };
 
   const celebrate = useCallback<CelebrationApi['celebrate']>(
-    (point, xp, tone = 'normal') => {
+    (point, gain, tone = 'normal') => {
       const reduced = prefersReducedMotion();
       const palette = TONE_COLORS[tone];
+      const count = tone === 'normal' ? 12 : 20;
       const particles: Particle[] = reduced
         ? []
-        : Array.from({ length: tone === 'normal' ? 12 : 18 }, (_, index) => {
-            const angle = (Math.PI * 2 * index) / (tone === 'normal' ? 12 : 18) + Math.random() * 0.5;
+        : Array.from({ length: count }, (_, index) => {
+            const angle = (Math.PI * 2 * index) / count + Math.random() * 0.5;
+            const spread = tone === 'normal' ? 44 : 62;
             return {
-              tx: Math.cos(angle) * (46 + Math.random() * 54),
-              ty: Math.sin(angle) * (46 + Math.random() * 54),
+              tx: Math.cos(angle) * (spread + Math.random() * 52),
+              ty: Math.sin(angle) * (spread + Math.random() * 52),
               delay: Math.random() * 90,
               color: palette[index % palette.length],
               size: 4 + Math.random() * 5,
+              round: index % 3 === 0,
             };
           });
 
-      const burst: Burst = { id: nextId(), x: point.x, y: point.y, xp, tone, particles };
+      const burst: Burst = {
+        id: nextId(),
+        x: point.x,
+        y: point.y,
+        xp: gain.xp,
+        multiplier: gain.multiplier,
+        tone,
+        particles,
+      };
       setBursts((prev) => [...prev.slice(-6), burst]);
       window.setTimeout(() => setBursts((prev) => prev.filter((item) => item.id !== burst.id)), 1100);
 
       if (settings.soundEnabled) playChime(tone);
-      vibrate(tone);
+      if (settings.hapticsEnabled) haptic(tone);
     },
-    [settings.soundEnabled],
+    [settings.hapticsEnabled, settings.soundEnabled],
   );
 
   const toast = useCallback((entry: Omit<Toast, 'id'>) => {
     const item: Toast = { ...entry, id: nextId() };
     setToasts((prev) => [...prev.slice(-2), item]);
-    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== item.id)), 3400);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== item.id)), 3600);
   }, []);
 
   const notify = useCallback<CelebrationApi['notify']>(
@@ -167,33 +198,64 @@ export function CelebrationProvider({ children }: { children: ReactNode }) {
     [toast],
   );
 
+  const offerUndo = useCallback((undo: CompletionUndo) => {
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+    const entry: PendingUndo = { id: nextId(), undo };
+    setPending(entry);
+    undoTimer.current = window.setTimeout(() => {
+      setPending((current) => (current?.id === entry.id ? null : current));
+    }, 6000);
+  }, []);
+
   const announce = useCallback<CelebrationApi['announce']>(
     (outcome, point) => {
       if (outcome.leveledUp) {
-        const done = tasks.filter((task) => task.completed).length;
         toast({
           icon: '🏅',
           title: `Level ${outcome.level.level}`,
-          subtitle: `${done} tasks completed · ${outcome.progress.xp} XP`,
+          subtitle: `${outcome.progress.xp} XP · ${outcome.progress.totalCompleted} completed`,
           tone: 'level',
         });
-        if (point) celebrate(point, outcome.xpGain, 'level');
+        if (point) celebrate(point, { xp: outcome.xpGain, multiplier: outcome.multiplier }, 'level');
         else if (settings.soundEnabled) playChime('level');
-        return;
+      } else if (outcome.clearedParentId && point) {
+        celebrate(point, { xp: outcome.checklistBonus, multiplier: 1 }, 'checklist');
       }
+
+      for (const achievement of outcome.achievements) {
+        toast({
+          icon: achievement.icon,
+          title: achievement.title,
+          subtitle: achievement.description,
+          tone: 'level',
+        });
+      }
+
       if (outcome.milestone) {
-        toast({ icon: '🔥', title: outcome.milestone, subtitle: `${outcome.progress.streak} day streak`, tone: 'checklist' });
+        toast({
+          icon: '🔥',
+          title: outcome.milestone,
+          subtitle: `${outcome.progress.streak}-day streak`,
+          tone: 'checklist',
+        });
       }
-      if (outcome.clearedParentId && point) {
-        celebrate(point, outcome.xpGain, 'checklist');
-      }
+
+      if (outcome.undo) offerUndo(outcome.undo);
     },
-    [celebrate, settings.soundEnabled, tasks, toast],
+    [celebrate, offerUndo, settings.soundEnabled, toast],
   );
 
-  const api = useRef<CelebrationApi>({ celebrate, announce, notify });
-  api.current = { celebrate, announce, notify };
-  const value = api.current;
+  const handleUndo = useCallback(
+    (entry: PendingUndo) => {
+      undoCompletion(entry.undo);
+      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+      setPending(null);
+      if (settings.hapticsEnabled) haptic('normal');
+    },
+    [settings.hapticsEnabled, undoCompletion],
+  );
+
+  const value: CelebrationApi = { celebrate, announce, notify };
 
   return (
     <CelebrationContext.Provider value={value}>
@@ -206,7 +268,7 @@ export function CelebrationProvider({ children }: { children: ReactNode }) {
             {burst.particles.map((particle, index) => (
               <span
                 key={index}
-                className="burst__particle"
+                className={`burst__particle${particle.round ? ' burst__particle--round' : ''}`}
                 style={{
                   background: particle.color,
                   width: particle.size,
@@ -217,7 +279,10 @@ export function CelebrationProvider({ children }: { children: ReactNode }) {
                 }}
               />
             ))}
-            <span className={`burst__xp burst__xp--${burst.tone}`}>+{burst.xp} XP</span>
+            <span className={`burst__xp burst__xp--${burst.tone}`}>
+              +{burst.xp} XP
+              {burst.multiplier > 1 && <b className="burst__combo"> ×{burst.multiplier}</b>}
+            </span>
           </div>
         ))}
       </div>
@@ -235,6 +300,17 @@ export function CelebrationProvider({ children }: { children: ReactNode }) {
           </div>
         ))}
       </div>
+
+      {pending && (
+        <div className="undo-pill" role="status">
+          <span className="undo-pill__text">
+            Done: <strong>{pending.undo.label}</strong>
+          </span>
+          <button type="button" className="undo-pill__button" onClick={() => handleUndo(pending)}>
+            Undo
+          </button>
+        </div>
+      )}
     </CelebrationContext.Provider>
   );
 }

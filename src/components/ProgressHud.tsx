@@ -7,7 +7,13 @@
 
 import { useMemo, useState } from 'react';
 import { formatDateShort, todayISO } from '../domain/date';
-import { completionsByDay, currentStreak, levelForXp } from '../domain/progress';
+import {
+  ACHIEVEMENTS,
+  comboActive,
+  completionsByDay,
+  currentStreak,
+  levelForXp,
+} from '../domain/progress';
 import { useTasker } from '../state/store';
 
 export function ProgressHud() {
@@ -17,8 +23,10 @@ export function ProgressHud() {
   const progress = settings.progress;
   const level = levelForXp(progress.xp);
   const streak = currentStreak(progress);
+  const comboing = comboActive(progress);
   const today = todayISO();
   const doneToday = progress.todayDate === today ? progress.todayCount : 0;
+  const unlocked = useMemo(() => new Set(progress.unlocked), [progress.unlocked]);
 
   const plannedToday = useMemo(
     () => tasks.filter((task) => !task.completed && task.date === today && task.parentId === null).length,
@@ -60,6 +68,11 @@ export function ProgressHud() {
             🔥{streak}
           </span>
         )}
+        {comboing && (
+          <span className="hud__combo" title={`${progress.combo}× combo — keep going`}>
+            ⚡{Math.min(progress.combo, 5)}×
+          </span>
+        )}
         {doneToday > 0 && (
           <span className="hud__today" title={`${doneToday} completed today`}>
             ✓{doneToday}
@@ -86,6 +99,15 @@ export function ProgressHud() {
                 aria-pressed={settings.soundEnabled}
               >
                 {settings.soundEnabled ? '🔈' : '🔇'}
+              </button>
+              <button
+                type="button"
+                className={`icon-button${settings.hapticsEnabled ? ' icon-button--on' : ''}`}
+                onClick={() => updateSettings({ hapticsEnabled: !settings.hapticsEnabled })}
+                title={settings.hapticsEnabled ? 'Turn off vibration' : 'Vibrate on completion'}
+                aria-pressed={settings.hapticsEnabled}
+              >
+                📳
               </button>
             </header>
 
@@ -144,6 +166,30 @@ export function ProgressHud() {
                 ))}
               </div>
             )}
+
+            <div className="hud__achievements">
+              <span className="hud__section-title">
+                Achievements
+                <span className="hud__muted">
+                  {unlocked.size}/{ACHIEVEMENTS.length}
+                </span>
+              </span>
+              <div className="badge-grid">
+                {ACHIEVEMENTS.map((achievement) => {
+                  const owned = unlocked.has(achievement.id);
+                  return (
+                    <span
+                      key={achievement.id}
+                      className={`badge${owned ? ' badge--owned' : ''}`}
+                      title={`${achievement.title} — ${achievement.description}`}
+                    >
+                      <span aria-hidden="true">{owned ? achievement.icon : '🔒'}</span>
+                      {achievement.title}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </>
       )}

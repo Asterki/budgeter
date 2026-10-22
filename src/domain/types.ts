@@ -131,6 +131,16 @@ export interface Progress {
   /** Completions on `todayDate`, used for milestone messages. */
   todayCount: number;
   todayDate: string | null;
+  /** Most completions in a single day. */
+  bestDayCount: number;
+  /** Rapid-fire completion combo, and when the last link landed. */
+  combo: number;
+  bestCombo: number;
+  lastComboAt: number | null;
+  /** How many parent checklists have been fully cleared. */
+  checklistsCleared: number;
+  /** Unlocked achievement ids. */
+  unlocked: string[];
 }
 
 export const EMPTY_PROGRESS: Progress = {
@@ -141,6 +151,12 @@ export const EMPTY_PROGRESS: Progress = {
   lastCompletionDate: null,
   todayCount: 0,
   todayDate: null,
+  bestDayCount: 0,
+  combo: 0,
+  bestCombo: 0,
+  lastComboAt: null,
+  checklistsCleared: 0,
+  unlocked: [],
 };
 
 export interface Settings {
@@ -155,6 +171,8 @@ export interface Settings {
   progress: Progress;
   /** Plays a short chime on completion. Off by default. */
   soundEnabled: boolean;
+  /** Vibrates on completion where the device supports it. */
+  hapticsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -171,8 +189,15 @@ export const DEFAULT_SETTINGS: Settings = {
     lastCompletionDate: null,
     todayCount: 0,
     todayDate: null,
+    bestDayCount: 0,
+    combo: 0,
+    bestCombo: 0,
+    lastComboAt: null,
+    checklistsCleared: 0,
+    unlocked: [],
   },
   soundEnabled: false,
+  hapticsEnabled: true,
 };
 
 /** Shape of a full JSON backup produced by "Export". */

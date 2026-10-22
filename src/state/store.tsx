@@ -32,7 +32,7 @@ import type {
 } from '../domain/types';
 import { DEFAULT_SETTINGS } from '../domain/types';
 import { isExhausted, nextOccurrence } from '../domain/recurrence';
-import { applyCompletion, type CompletionOutcome } from '../domain/progress';
+import { applyCompletion, revertCompletion, type CompletionOutcome, type CompletionUndo } from '../domain/progress';
 import { syncReminders } from '../notifications/push';
 
 export const PROJECT_COLORS = [
@@ -78,6 +78,8 @@ interface TaskerContextValue {
   deleteTask: (id: string) => void;
   /** Returns what to celebrate, or null when a task was un-completed. */
   toggleComplete: (id: string) => CompletionOutcome | null;
+  /** Reverses a completion (used by the toast's Undo action). */
+  undoCompletion: (undo: CompletionUndo) => void;
   duplicateTask: (id: string) => void;
   reorderTask: (id: string, direction: -1 | 1) => void;
   /** Ids of every descendant of a task, breadth-first. */
@@ -538,17 +540,27 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
         if (children.length > 0 && children.every((item) => item.completed)) clearedParentId = id;
       }
 
-      const outcome = applyCompletion(settingsRef.current.progress, task, clearedParentId);
+      // Recurring tasks roll forward: the checklist moves to the new occurrence
+      // instead of being completed, and undo would be ambiguous.
+      const recurring = Boolean(task.recurrence && task.date);
+      const occurrences = recurring ? all.filter((item) => item.seriesId === task.seriesId).length : 0;
+      const nextDate = recurring ? nextOccurrence(task.recurrence!, task.date!) : null;
+      const exhausted = recurring && nextDate ? isExhausted(task.recurrence!, nextDate, occurrences) : false;
+      const rollsOver = Boolean(recurring && nextDate && !exhausted);
+
+      const completedAlongside = rollsOver ? [] : descendants;
+      const outcome = applyCompletion(
+        settingsRef.current.progress,
+        task,
+        clearedParentId,
+        completedAlongside,
+        now,
+      );
       updateSettings({ progress: outcome.progress });
 
       const done = { completed: true, completedAt: now, reminded: true };
 
-      // Recurring: archive this occurrence and schedule the next one.
-      if (task.recurrence && task.date) {
-        const occurrences = all.filter((item) => item.seriesId === task.seriesId).length;
-        const nextDate = nextOccurrence(task.recurrence, task.date);
-        const exhausted = isExhausted(task.recurrence, nextDate, occurrences);
-
+      if (recurring && nextDate) {
         commitTasks((current) => {
           let next = withPatch(current, id, done, []);
           if (exhausted) return withMany(next, descendants, done);
@@ -582,7 +594,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
           return [...next, occurrence];
         });
 
-        return outcome;
+        return rollsOver ? { ...outcome, undo: null } : outcome;
       }
 
       // Completing a parent completes its whole subtree.
@@ -590,6 +602,18 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       return outcome;
     },
     [commitTasks, descendantIds, updateSettings],
+  );
+
+  /** One-tap reversal offered by the completion toast. */
+  const undoCompletion = useCallback(
+    (undo: CompletionUndo) => {
+      const ids = [undo.taskId, ...undo.alsoCompletedIds];
+      commitTasks((current) =>
+        withMany(current, ids, { completed: false, completedAt: null, reminded: false }),
+      );
+      updateSettings({ progress: revertCompletion(settingsRef.current.progress, undo) });
+    },
+    [commitTasks, updateSettings],
   );
 
   const reorderTask = useCallback((id: string, direction: -1 | 1) => {
@@ -688,6 +712,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       updateTask,
       deleteTask,
       toggleComplete,
+      undoCompletion,
       duplicateTask,
       reorderTask,
       descendantIds,
@@ -720,6 +745,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       updateTask,
       deleteTask,
       toggleComplete,
+      undoCompletion,
       duplicateTask,
       reorderTask,
       descendantIds,

@@ -5,7 +5,7 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { BackupFile, Category, Settings } from '../domain/types';
 import { formatDateShort, todayISO } from '../domain/date';
-import { completionsByDay, currentStreak, levelForXp } from '../domain/progress';
+import { completionsByDay, currentStreak, levelForXp, ACHIEVEMENTS } from '../domain/progress';
 import { CATEGORY_COLORS, useTasker } from '../state/store';
 import {
   currentSubscription,
@@ -205,6 +205,14 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
             />
             <span>Completion chime</span>
           </label>
+          <label className="switch switch--boxed">
+            <input
+              type="checkbox"
+              checked={settings.hapticsEnabled}
+              onChange={(event) => patch({ hapticsEnabled: event.target.checked })}
+            />
+            <span>Haptic feedback</span>
+          </label>
           <label className="field">
             <span className="field__label">Theme</span>
             <select
@@ -216,6 +224,30 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
               <option value="nordic-dark">Nordic Dark</option>
             </select>
           </label>
+        </div>
+
+        <div className="hud__achievements">
+          <span className="hud__section-title">
+            Achievements
+            <span className="hud__muted">
+              {progress.unlocked.length}/{ACHIEVEMENTS.length}
+            </span>
+          </span>
+          <div className="badge-grid">
+            {ACHIEVEMENTS.map((achievement) => {
+              const owned = progress.unlocked.includes(achievement.id);
+              return (
+                <span
+                  key={achievement.id}
+                  className={`badge${owned ? ' badge--owned' : ''}`}
+                  title={achievement.description}
+                >
+                  <span aria-hidden="true">{owned ? achievement.icon : '🔒'}</span>
+                  {achievement.title}
+                </span>
+              );
+            })}
+          </div>
         </div>
       </div>
 

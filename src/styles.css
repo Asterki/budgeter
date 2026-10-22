@@ -2704,6 +2704,152 @@ textarea.input {
   font-size: 0.875rem;
 }
 
+/* ── Achievements, combos and undo ────────────────────────────────────────── */
+
+.hud__combo {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--p2);
+  font-variant-numeric: tabular-nums;
+}
+
+.burst__combo {
+  font-size: 0.75em;
+  color: var(--p2);
+}
+
+.burst__particle--round {
+  border-radius: 50%;
+}
+
+.hud__section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--on-surface-muted);
+}
+
+.hud__achievements {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.badge-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.6875rem;
+  color: var(--on-surface-muted);
+  opacity: 0.6;
+}
+
+.badge--owned {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  color: var(--on-surface);
+  font-weight: 600;
+}
+
+.undo-pill {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--space-md) + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 310;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  max-width: min(92vw, 460px);
+  padding: 8px 10px 8px 16px;
+  border-radius: 999px;
+  background: var(--on-surface);
+  color: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: undo-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.undo-pill__text {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.undo-pill__text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.undo-pill__button {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 22%, transparent);
+  color: var(--surface);
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.undo-pill__button:hover {
+  background: color-mix(in srgb, var(--surface) 34%, transparent);
+}
+
+@keyframes undo-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 16px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.rail__progress {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--surface-variant);
+  overflow: hidden;
+}
+
+.rail__progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  transition: width 320ms ease;
+}
+
+.rail__row {
+  position: relative;
+  padding-bottom: 3px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.001ms !important;

@@ -7,76 +7,108 @@ optional update check.
 
 ---
 
-## 1. Layout
+## 1. Structure
+
+Tasker organises work in four levels:
+
+```
+Category        Work, Personal, …            ← groups projects
+  └ Project     Student management system     ← groups tasks, owns tags
+      └ Task    Draft the proposal
+          └ Subtask  Collect requirements     ← nests forever
+```
+
+- **Categories** are the top level, created from the rail or in Settings.
+- **Projects** belong to a category and own their own tag set.
+- **Tasks** belong to a project (or the Inbox) and can carry priorities, places,
+  dates, times, tags and recurrence.
+- **Subtasks** are ordinary tasks with a parent, so they support *exactly* the
+  same metadata and nest to any depth.
+
+---
+
+## 2. Layout
 
 ### Desktop
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ● ● ●   Tasker            [ search ]                 [ + Add task ] │  ← global menu bar
-├───────────────┬──────────────────────────────────────────────────────┤
-│  Inbox        │                                                      │
-│  Today        │                 Active view                          │
-│  Upcoming     │        (Tasks · Calendar · Roadmap · Settings)       │
-│  All tasks    │                                                      │
-│  ───────────  │                                                      │
-│  PROJECTS     │                                                      │
-│   ● UNAH      │                                                      │
-│   ● Tasker    │                                                      │
-│  ───────────  │                                                      │
-│  PLACES       │                                                      │
-│   @work       │                                                      │
-│   @home       │                                                      │
-├───────────────┴──────────────────────────────────────────────────────┤
-│  ⚙ Settings   ● Notifications off                                    │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ● ● ●  Tasker      [ Search tasks ]        ( 3 ) 🔥4 ⚡2× ✓7   ☾ ?  ＋Task │
+├───────────────┬──────────────────────────────────────────────────────────┤
+│ Scheduled     │                                                          │
+│ Today         │                     Active view                          │
+│ Inbox         │          Tasks · Calendar · Roadmap · Settings           │
+│ All tasks     │                                                          │
+│ Completed     │                                                          │
+│ ───────────   │                                                          │
+│ CATEGORIES ＋ │                                                          │
+│  ▾ ● Work     │                                                          │
+│     ● Tasker  │  ← thin progress bar under each project                  │
+│     ＋ Project│                                                          │
+│  ▾ ● Personal │                                                          │
+│ ───────────   │                                                          │
+│ PLACES        │                                                          │
+│  @desk @home  │                                                          │
+├───────────────┴──────────────────────────────────────────────────────────┤
+│ ⚙ Settings   ? User manual        ● Notifications off                    │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-The window controls sit in the top-left corner (Nordic "quiet chrome"), the
-global menu bar spans the top edge, and the left rail holds navigation. Clicking
-a task opens the detail panel on the right side of the workspace.
+The window controls sit in the top-left corner, the global menu bar spans the top
+edge, and the left rail holds navigation. Clicking a task opens the detail panel
+on the right.
+
+The badge in the top bar is your **progress HUD**: level ring, streak, current
+combo and how many you have finished today. Click it for the full breakdown.
 
 ### Mobile
 
-The bottom tab bar holds **Tasks**, **Calendar**, **Roadmap** and **More**.
-A floating **+** button sits above the tab bar, inside the thumb zone. Creating
-and editing happen in a **bottom sheet**: drag the handle down — or swipe the
-sheet away — to close it. The sheet's primary actions live at the bottom of the
-screen so everything is reachable with one hand.
+The bottom tab bar holds **Tasks**, **Calendar**, **Roadmap** and **More**. A
+floating **+** sits in the thumb zone. Creating and editing happen in a **bottom
+sheet**: drag the handle down — or swipe the sheet away — to close it.
 
 ---
 
-## 2. Views
+## 3. Views
+
+### Scheduled (the landing view)
+
+Every task that has a date, grouped by the day it sits on and sorted
+chronologically. Overdue days sort to the top, then today, tomorrow, and out into
+the future. Undated work stays in the Inbox or inside its project.
+
+The quick-add field is focused automatically on desktop, so you can open Tasker
+and start typing immediately.
 
 ### Tasks
 
-A single, fast list. Use it to sort, filter and manipulate tasks.
+One list, scoped by whatever you picked in the rail (a category, a project, a
+place, or a smart list). Use it to sort, filter and manipulate tasks.
 
-- **Debounced live filter** — typing in *Filter tasks…* narrows the list after a
-  short pause, so the UI never stutters.
-- **Sort** — by due date, priority, creation date, alphabetically, or manual
-  order.
+- **Debounced live filter** — typing narrows the list after a short pause.
 - **Group** — by date, project, priority, place or roadmap lane.
+- **Sort** — by due date, priority, creation date, alphabetically, or manual.
 - **Priority flag** — click the flag on a row to cycle P1 → P2 → P3 → P4.
-- **Checkbox** — completes a task. Completing a *recurring* task archives that
-  occurrence and schedules the next one automatically.
+- **Subtask expander** — rows with children show `2/3`; click it to nest them
+  inline. The `＋` button on a row adds a subtask without opening anything.
 
 ### Calendar
 
-An interactive month/week grid. Each day shows up to three scheduled items and
-a badge with the number of open tasks. Select a day to inspect it; the day panel
-below the grid offers a quick-add field pre-dated to that day.
+An interactive month/week grid. A **multi-day task appears on every day it
+spans**; continuation days are dashed and italic so the start is obvious. Select
+a day to inspect it; the day panel below offers a quick-add pre-dated to that day.
 
 ### Roadmap
 
-A timeline of execution sequences. Tasks are grouped into **lanes** (set the
-lane in the task detail panel) and plotted week-by-week, or day-by-day with the
-**Days** toggle. Bars are coloured by priority, get a left edge in the project
-colour, and turn red when overdue. Unscheduled work sits in the backlog below.
+A timeline of execution sequences. Top-level tasks are grouped into **lanes**
+(set the lane in the detail panel) and plotted week-by-week, or day-by-day with
+the **Days** toggle. Bars are coloured by priority and turn red when overdue.
+Subtasks stay with their parent instead of cluttering the timeline. Unscheduled
+work sits in the backlog below.
 
 ---
 
-## 3. Natural-language quick add
+## 4. Natural-language quick add
 
 Type a normal sentence and Tasker extracts the metadata as you type — the chips
 under the input always show exactly what will be saved.
@@ -93,6 +125,8 @@ Create a new feature in the app @work tomorrow !1 #UNAH
 | Priority | 1 |
 | Project | UNAH |
 
+**Press `Enter` to send.** `Esc` clears the field.
+
 ### Tokens
 
 | Token | Meaning | Examples |
@@ -100,169 +134,207 @@ Create a new feature in the app @work tomorrow !1 #UNAH
 | `@place` | Physical or contextual place | `@work` `@home` `@downtown` |
 | `!1` … `!4` | Priority (1 = urgent, 4 = none) | `!1` `!p2` |
 | `#Project` | Project (created automatically if new) | `#UNAH` `#Deep Work` |
+| `^Category` | Category (created if new) | `^Work` `^Personal` |
 | `+tag` | Tag from the target project | `+design` `+urgent` |
+
+A token must be preceded by a space (or start the line), so email addresses and
+words like `C#` are never mistaken for tokens. The dropdown inserts the space for
+you.
 
 ### Dates
 
-`today`, `tomorrow`, `tonight`, `monday` … `sunday`, `next friday`,
-`this monday`, `next week`, `next month`, `in 3 days`, `in 2 weeks`,
-`25/10`, `10/25/2027`, `2027-01-09`, `Oct 25`, `25 Oct`, `Oct 25 2027`.
+`today`, `tomorrow`, `tonight`, `mon` … `sun`, `monday` … `sunday`,
+`next friday`, `this monday`, `next week`, `next month`, `in 3 days`,
+`in 2 weeks`, `25/10`, `10/25/2027`, `2027-01-09`, `Oct 25`, `25 Oct`,
+`Oct 25 2027`.
 
-### Times, durations and recurrence
+### Times, durations and multi-day spans
 
-`3pm`, `3:30pm`, `15:00`, `at 7`, `noon`, `morning`, `evening`,
-`9-11am`, `from 9 to 11am` (sets a duration),
+`3pm`, `3:30pm`, `15:00`, `at 7`, `noon`, `morning`, `evening`.
+
+- **Start and end time:** `9-11am`, `from 9 to 11am`, `at 3pm to 5pm`.
+- **Start and end date:** `tomorrow until monday`, `Oct 24 through Oct 30`.
+
+A date with no time is an **all-day** event. Adding a time turns it into a
+micro-scheduled timeframe with an optional finish time.
+
+### Recurrence
+
 `every day`, `every 2 weeks`, `every monday`, `every month`, `every 1st`,
 `every year`, `daily`, `weekly`, `monthly`, `yearly`.
 
-A date with no time is an **all-day** event; adding a time turns it into a
-micro-scheduled timeframe you can give a duration.
+### Autocomplete dropdowns
+
+Start a token and a list of what already exists appears — arrow keys to move,
+`Tab` or `Enter` to accept (or click it):
+
+| Trigger | Suggests |
+| --- | --- |
+| `#` | projects, **grouped by category** |
+| `^` | categories |
+| `@` | places |
+| `!` | priorities 1–4 |
+| `+` | tags, scoped to the project you already typed |
+
+While the list is open, `Enter` still sends the task unless you have moved into
+the list with the arrow keys.
 
 ---
 
-## 4. Keyboard shortcuts
+## 5. Progress and rewards
+
+Finishing something should feel like finishing something.
+
+- **XP** — every tick scores XP by priority: P1 12, P2 8, P3 5, P4 3.
+- **Combo** — complete tasks within 8 seconds of each other and the multiplier
+  climbs ×2, ×3 … up to ×5. The HUD shows the live combo while it is running.
+- **Checklist bonus** — ticking the last open subtask of a parent adds 6 XP and
+  fires its own green burst.
+- **Levels** — 100 XP for level 2, 200 more for level 3, and so on. The ring in
+  the top bar fills as you go and a toast announces each level.
+- **Streak** — consecutive days with at least one completion, with your best
+  streak kept forever. The flame only goes out after a full day is skipped.
+- **Achievements** — twelve of them, from *First step* to *Veteran*, listed in the
+  HUD and in Settings. Unlocking one raises a toast.
+- **Daily milestones** — 1, 3, 5, 10 and 20 completions in a day get a shout.
+- **Haptics** — supported devices buzz on completion, with a distinct pattern for
+  a level-up or a cleared checklist. Toggle it in the HUD or Settings.
+- **Sound** — an optional short chime, a richer arpeggio for level-ups. Off by
+  default; toggle it with the speaker icon in the HUD.
+- **Undo** — every completion raises an *Undo* pill at the bottom of the screen
+  for six seconds. Undoing restores the task (and its subtasks) and takes the XP
+  back, so a mis-tap costs nothing.
+
+All of this respects `prefers-reduced-motion` — with it enabled the particles are
+skipped and only the XP label and toasts remain.
+
+---
+
+## 6. Keyboard shortcuts
 
 | Keys | Action |
 | --- | --- |
 | `n` | Focus the quick-add field |
 | `/` or `⌘/Ctrl + K` | Focus the filter / search field |
-| `1` | Tasks view |
+| `1` | Scheduled view |
 | `2` | Calendar view |
 | `3` | Roadmap view |
 | `4` | Settings |
 | `t` | Jump to Today |
 | `?` | Open this manual |
-| `Esc` | Close the open panel or sheet |
+| `Esc` | Close the open panel, sheet, or dropdown |
 
 Shortcuts are disabled while you are typing in a field.
 
 ---
 
-## 5. Projects, tags and places
+## 7. Projects, tags and places
 
-- **Projects** are isolated containers. Each one owns its own colour, its own
-  tag set and its own task list. Create one from the left rail (**+ New
-  project**) or simply by typing `#Name` in quick add.
-- **Tags** belong to a project. Add them from the task detail panel; attach or
-  detach them with a click.
-- **Places** are global contexts such as `@work` or `@home`. They appear in the
-  left rail and can be used as a grouping dimension.
+- **Projects** are isolated containers with their own colour, tags and tasks.
+  Create one from the rail (**＋ New project**) or by typing `#Name`.
+- **Tags** belong to a project. Add them from the detail panel or the `+ tag`
+  button in a project view; attach or detach them with a click. Clicking a tag
+  chip in a project view filters the list to it.
+- **Places** are global contexts such as `@work`. They appear in the rail and can
+  be used as a grouping dimension.
+
+Manage a category or project with the `⋯` button next to it: rename, recolour,
+move a project between categories, or delete. Deleting a category keeps its
+projects; deleting a project moves its tasks to the Inbox.
 
 ---
 
-## 6. Recurrence
+## 8. Subtasks
 
-Open a task and choose a repeat cycle. Simple cycles (daily, weekly, monthly,
-yearly) work out of the box; the **custom** controls add:
+Open a task and use **Subtasks → Add a subtask**, or press `＋` on any row. A
+subtask:
 
-- a multi-unit interval (`every 2 weeks`),
-- explicit weekdays for weekly rules,
-- a day of month for monthly / yearly rules,
-- an end date and a maximum number of occurrences.
+- inherits its parent's project,
+- uses the same natural-language syntax as any other task,
+- can itself have subtasks, forever,
+- shows the parent's progress as `2/3` once you tick some off.
+
+Completing a parent completes its whole subtree. Deleting a parent deletes its
+subtree (you are asked first). Completing a **recurring** task moves its
+checklist onto the new occurrence and resets it, so a weekly routine keeps its
+steps.
+
+---
+
+## 9. Recurrence
+
+Open a task and choose a repeat cycle. Simple cycles work out of the box; the
+custom controls add a multi-unit interval (`every 2 weeks`), explicit weekdays,
+a day of month, an end date, and a maximum number of occurrences.
 
 Completing a recurring task archives the current occurrence and creates the next
 one, so your history stays intact.
 
 ---
 
-## 7. Notifications (Web Push + Vercel Cron)
+## 10. Notifications
 
-Notifications are delivered by a serverless cron job that runs every minute on
-Vercel, so they arrive even when Tasker is closed.
+Reminders are delivered **in the app** whenever Tasker is open, and by **web
+push** when the browser grants push access — even if the tab is closed.
 
-### One-time server setup
+1. Open **Settings → Notifications** and click **Enable notifications**.
+2. Accept the browser prompt.
 
-1. Generate a VAPID key pair:
+That is all that is needed for in-app reminders. Background push additionally
+requires a VAPID key pair in the deployment environment
+(`VITE_VAPID_PUBLIC_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+`VAPID_SUBJECT`); without it the Settings panel says so and reminders simply
+arrive while the app is open.
 
-   ```bash
-   npx web-push generate-vapid-keys
-   ```
+**Vercel's cron job is disabled** in this build, so no schedule runs on the
+server by default. If you want background delivery, point any free scheduler
+(cron-job.org, a Cloudflare Worker Cron Trigger, a GitHub Actions schedule) at:
 
-2. In **Vercel → Project → Settings → Environment Variables** add:
+```
+https://your-app.vercel.app/api/check-reminders?secret=YOUR_CRON_SECRET
+```
 
-   | Variable | Value |
-   | --- | --- |
-   | `VAPID_PUBLIC_KEY` | the public key |
-   | `VAPID_PRIVATE_KEY` | the private key |
-   | `VAPID_SUBJECT` | `mailto:you@example.com` |
-   | `VITE_VAPID_PUBLIC_KEY` | the **same** public key (exposed to the client) |
-
-3. Optional but recommended — add a KV store so the reminder snapshot survives
-   cold starts. Any Upstash-compatible REST endpoint works; Tasker reads
-   `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or
-   `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
-
-4. Redeploy. `vercel.json` already registers the cron — it is scheduled as
-   `0 13 * * *` (13:00 UTC / 07:00 in Honduras) because Vercel's **Hobby plan
-   allows a cron only once per day**. Change the hour in `vercel.json` to suit
-   your timezone.
-
-> **Plan limits.** Hobby = once per day, and Vercel may run it at any point
-> inside that hour (±59 min). Pro and Enterprise allow `* * * * *` (every
-> minute). On Hobby, reminders therefore arrive as a single morning catch-up
-> covering everything that came due in the previous 24 hours; anything older is
-> dropped as stale. While Tasker is open, the in-app watcher still fires
-> reminders on the minute, so the daily catch-up only matters for the
-> closed-app case.
->
-> Want minute-accurate delivery on Hobby? Set `CRON_SECRET`, then point any free
-> scheduler (cron-job.org, Cloudflare Workers Cron Triggers, GitHub Actions) at
-> `https://your-app.vercel.app/api/check-reminders?secret=YOUR_CRON_SECRET` every
-> minute. The endpoint does not care who calls it.
-
-### Per-device opt-in
-
-1. Open **Settings → Notifications**.
-2. Click **Enable notifications** and accept the browser prompt.
-3. Tasker registers `sw.js`, subscribes through `PushManager` with the VAPID
-   public key, and stores the subscription in IndexedDB.
-4. It then mirrors your upcoming reminders to `/api/check-reminders`. The cron
-   job fires each reminder at its timestamp and marks it as reminded; reminder
-   ids that were already delivered are remembered for seven days so a re-sync
-   can never produce a duplicate notification.
-
-If the browser denies permission, or no VAPID key is configured, the panel tells
-you exactly what to fix.
+…every minute, after setting `CRON_SECRET`. Tasker syncs your upcoming reminders
+to that endpoint as soon as a push subscription exists.
 
 ### Installing the app (PWA)
 
-Use the browser's **Install** / **Add to Home Screen** action. Tasker then runs
-in its own window and works fully offline — the service worker caches the app
-shell on first visit and serves it from cache afterwards.
+Use the browser's **Install** / **Add to Home Screen** action. Tasker then runs in
+its own window and works fully offline.
 
 ---
 
-## 8. Backup, restore and reset
+## 11. Backup, restore and reset
 
 Everything lives in **Settings → Data**.
 
-- **Export JSON** downloads a complete snapshot: projects, tags, places, tasks
-  and settings.
-- **Import JSON** restores that snapshot. Import *replaces* the current state,
-  so export first if you are unsure.
+- **Export JSON** downloads a complete snapshot: categories, projects, tags,
+  places, tasks (with subtasks and progress) and settings.
+- **Import JSON** restores that snapshot. Import *replaces* the current state, so
+  export first if you are unsure.
 - **Reset app** erases all local data. This cannot be undone.
 
 Keep the exported file somewhere safe — it is the only copy of your data.
 
 ---
 
-## 9. Offline behaviour
+## 12. Offline behaviour
 
 - The app shell is cached by `sw.js`, so Tasker opens with no network.
 - All reads and writes go to IndexedDB and work offline.
 - Reminder sync is best-effort: when you come back online, the next sync pushes
-  the current reminder list to the cron endpoint.
+  the current reminder list.
 
 ---
 
-## 10. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
 | No notifications | Check the browser permission, then re-enable in Settings. |
-| “No VAPID public key configured” | Set `VITE_VAPID_PUBLIC_KEY` and redeploy. |
-| Deployment fails with “Hobby accounts are limited to daily cron jobs” | Use a once-per-day schedule such as `0 13 * * *`, or trigger `/api/check-reminders` from an external scheduler. |
-| Reminders arrive in one batch each morning | Expected on Hobby — the cron runs once per day. Upgrade to Pro or use an external per-minute trigger. |
-| Notifications stop after a while | Confirm the cron is registered in Vercel and that a KV store is configured. |
+| Reminders only arrive while the app is open | Expected unless a VAPID key is configured and something calls `/api/check-reminders`. |
+| A `#project` or `^category` stayed in the task title | Put a space before the token — `release #Tasker`, not `release#Tasker`. |
+| The combo never builds | Completions must be within 8 seconds of each other. |
+| No vibration | Most desktops have no vibration motor; check the toggle in the HUD. |
 | App shows stale content | Hard-reload once; the service worker updates on the next visit. |
 | Lost data | Import your most recent JSON export. |

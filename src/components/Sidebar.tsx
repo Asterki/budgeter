@@ -40,6 +40,15 @@ export function Sidebar({
     const byCategory = new Map<string, number>();
     const projectById = new Map(projects.map((project) => [project.id, project]));
     const byPlace = new Map<string, number>();
+    const progressByProject = new Map<string, { done: number; total: number }>();
+
+    for (const task of tasks) {
+      if (!task.projectId) continue;
+      const bucket = progressByProject.get(task.projectId) ?? { done: 0, total: 0 };
+      bucket.total += 1;
+      if (task.completed) bucket.done += 1;
+      progressByProject.set(task.projectId, bucket);
+    }
 
     for (const task of open) {
       if (task.projectId) {
@@ -59,6 +68,7 @@ export function Sidebar({
       byProject,
       byCategory,
       byPlace,
+      progressByProject,
     };
   }, [tasks, projects, today]);
 
@@ -81,6 +91,8 @@ export function Sidebar({
 
   function renderProject(project: Project) {
     const active = isScope('project') && selection.projectId === project.id;
+    const ratio = stats.progressByProject.get(project.id);
+    const percent = ratio && ratio.total > 0 ? Math.round((ratio.done / ratio.total) * 100) : 0;
     return (
       <div className="rail__row" key={project.id}>
         <button
@@ -92,6 +104,15 @@ export function Sidebar({
           <span className="rail__label">{project.name}</span>
           <span className="rail__count">{stats.byProject.get(project.id) ?? 0}</span>
         </button>
+        {ratio && ratio.total > 0 && (
+          <span
+            className="rail__progress"
+            title={`${ratio.done} of ${ratio.total} done`}
+            aria-hidden="true"
+          >
+            <span style={{ width: `${percent}%` }} />
+          </span>
+        )}
         <button
           type="button"
           className="rail__more"

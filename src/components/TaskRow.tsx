@@ -10,7 +10,7 @@ import { useState, type MouseEvent } from 'react';
 import type { Priority, Task } from '../domain/types';
 import { formatTaskRange, formatTime, todayISO } from '../domain/date';
 import { describeRecurrence } from '../domain/recurrence';
-import { xpForTask } from '../domain/progress';
+import { previewGain } from '../domain/progress';
 import { useProjectMap, useTasker } from '../state/store';
 import { useCelebration } from './Celebration';
 
@@ -48,7 +48,7 @@ export function TaskRow({
   onAddSubtask,
   continuation = false,
 }: TaskRowProps) {
-  const { toggleComplete, updateTask } = useTasker();
+  const { toggleComplete, updateTask, settings } = useTasker();
   const { celebrate, announce } = useCelebration();
   const [pending, setPending] = useState(false);
   const projectMap = useProjectMap();
@@ -78,7 +78,7 @@ export function TaskRow({
     const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 
     setPending(true);
-    celebrate(point, xpForTask(task.priority));
+    celebrate(point, previewGain(settings.progress, task.priority));
 
     window.setTimeout(() => {
       setPending(false);

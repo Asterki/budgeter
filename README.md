@@ -17,13 +17,15 @@ IndexedDB. The only server-side piece is the reminder delivery endpoint.
 
 | Area | What you get |
 | --- | --- |
-| Capture | Inline natural-language parsing with live preview chips (`@place`, `!1`, `#Project`, `+tag`, dates, times, durations, recurrence) |
-| Views | Tasks (debounced filter, sort, group), Calendar (month/week), Roadmap (lane timeline, week/day zoom) |
-| Metadata | Priority 1–4, places, absolute dates, absolute times, all-day vs. micro-scheduled timeframes with duration |
+| Structure | Categories → projects → tasks → subtasks (nested to any depth) |
+| Capture | Inline natural-language parsing with live preview chips (`@place`, `!1`, `#Project`, `^Category`, `+tag`, dates, times, ranges, recurrence) and a trigger-driven autocomplete dropdown |
+| Views | Scheduled (all dated tasks grouped by day), Tasks (debounced filter, sort, group), Calendar (multi-day spans, month/week), Roadmap (lane timeline, week/day zoom) |
+| Metadata | Priority 1–4, places, start/end dates, start/end times, all-day vs. micro-scheduled timeframes |
 | Recurrence | Daily / weekly / monthly / yearly plus custom intervals, weekday picks, day-of-month, end date, occurrence cap |
-| Organisation | Isolated projects with per-project tags, global places, roadmap lanes |
+| Rewards | XP with a combo multiplier, levels, streaks, 12 achievements, daily milestones, and a 6-second Undo on every completion |
+| Feedback | Particle bursts at the checkbox, optional chime, haptic patterns, and toasts — all respecting `prefers-reduced-motion` |
 | Storage | IndexedDB, fully offline, JSON export / import / reset |
-| Notifications | Web Push + Vercel Cron running every minute, delivered while the app is closed |
+| Notifications | In-app reminders plus optional Web Push (Vercel Cron disabled — see below) |
 | PWA | Installable, custom `sw.js`, offline-first caching |
 
 ---
@@ -75,49 +77,24 @@ curl "http://localhost:5173/api/check-reminders?dry=1"
    | `CRON_SECRET` | optional; Vercel sends it automatically as a bearer token |
    | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | optional KV REST store for the reminder mirror |
 
-3. Deploy. `vercel.json` registers the cron and the SPA rewrite.
+3. Deploy. `vercel.json` handles the build, the SPA rewrite and the cache headers.
 
 > `.env.local` is git-ignored, so the private key never leaves your machine —
 > which also means Vercel needs the values copied across manually.
 
-### The cron schedule, plan by plan
+### The Vercel cron job is disabled
 
-Vercel restricts how often a project may schedule a cron job:
+`vercel.json` ships **without a `crons` array**, so nothing runs on a schedule
+by default and no task data is ever pushed to the server on a timer.
 
-| Plan | Minimum interval | Precision | Status |
-| --- | --- | --- | --- |
-| **Hobby** | **once per day** | per-hour (±59 min) | ✅ what is committed |
-| Pro | once per minute | per-minute | switch the schedule to `* * * * *` |
-| Enterprise | once per minute | per-minute | switch the schedule to `* * * * *` |
-
-`* * * * *` **fails the Hobby deployment** with *"Hobby accounts are limited to
-daily cron jobs. This cron expression would run more than once per day."* — so
-the committed schedule is:
-
-```json
-{ "crons": [{ "path": "/api/check-reminders", "schedule": "0 13 * * *" }] }
-```
-
-`0 13 * * *` is 13:00 UTC, i.e. **07:00 in Honduras (UTC−6)**. Crons are always
-UTC; change the hour in `vercel.json` to match your own morning.
-
-The endpoint adapts to whichever cadence it is given. It delivers every reminder
-that has come due since the previous tick, up to 24 hours late:
-
-- on **Pro / an external per-minute trigger** → fires on the minute;
-- on **Hobby's daily trigger** → one catch-up batch at the scheduled hour,
-  which reads as a morning agenda of everything that came due.
-
-Reminders older than 24 hours are dropped rather than delivered as stale noise.
-
-### Getting minute-accurate delivery on Hobby
-
-If the daily catch-up is not good enough on a Hobby budget, trigger the endpoint
-yourself from a free scheduler and drop the Vercel cron entirely:
+Reminders still work: Tasker watches for due tasks while the app is open and
+raises a notification through the service worker. For delivery while the app is
+*closed*, point any free scheduler at the endpoint — it keeps a 24-hour catch-up
+window, so how often you call it is entirely up to you:
 
 1. Add `CRON_SECRET` to the Vercel environment variables.
-2. Point any free scheduler (cron-job.org, Cloudflare Workers Cron Triggers, a
-   GitHub Actions scheduled workflow) at:
+2. Call the endpoint every minute from cron-job.org, a Cloudflare Worker Cron
+   Trigger, or a GitHub Actions schedule:
 
    ```
    https://<your-app>.vercel.app/api/check-reminders?secret=<CRON_SECRET>
@@ -126,8 +103,28 @@ yourself from a free scheduler and drop the Vercel cron entirely:
    …or send `Authorization: Bearer <CRON_SECRET>`. Without `CRON_SECRET` set the
    endpoint is open, which is fine for a single-user app but not recommended.
 
-Note that Vercel Cron cannot be scheduled more than once per day on Hobby, but
-nothing prevents *other* services from calling the same endpoint.
+To use Vercel's own cron instead, re-add it to `vercel.json`. Mind the plan
+limits — Hobby fails the deployment unless the schedule is **once per day**:
+
+| Plan | Minimum interval | Precision |
+| --- | --- | --- |
+| Hobby | once per day | per-hour (±59 min) |
+| Pro / Enterprise | once per minute | per-minute |
+
+```json
+{ "crons": [{ "path": "/api/check-reminders", "schedule": "0 13 * * *" }] }
+```
+
+`0 13 * * *` is 13:00 UTC — 07:00 in Honduras (UTC−6). Crons are always UTC.
+
+### Checking things work
+
+```bash
+curl "https://<your-app>.vercel.app/api/check-reminders?dry=1"
+```
+
+Reports what is due, how many reminders are pending, whether a subscription and
+VAPID keys are present, and which storage backend is in use.
 
 ### Without a KV store
 
@@ -151,10 +148,11 @@ tasker/
 ├── scripts/
 │   └── generate-icons.py      dependency-free icon generator
 ├── src/
-│   ├── components/            UI building blocks (rail, sheets, rows, editor…)
-│   ├── db/database.ts         IndexedDB persistence layer
+│   ├── components/            UI building blocks (rail, sheets, rows, tree, editor…)
+│   ├── db/database.ts         IndexedDB persistence layer (v2 schema)
 │   ├── docs/UserManual.tsx    in-app Markdown manual renderer
-│   ├── domain/                types, date maths, recurrence engine, NL parser
+│   ├── domain/                types, date maths, recurrence, NL parser,
+│   │                          suggestions, progress/XP maths
 │   ├── notifications/push.ts  permission, PushManager, reminder mirror sync
 │   ├── state/                 React context store, hooks, navigation model
 │   ├── views/                 Tasks, Calendar, Roadmap, Settings
@@ -169,15 +167,25 @@ tasker/
 
 - **Local-first.** IndexedDB is the source of truth; every mutation is written
   through immediately, so closing the tab never loses work.
+- **Subtasks are tasks.** A subtask is an ordinary `Task` with a `parentId`, so
+  nesting is unlimited and every subtask supports the full metadata set without
+  a parallel code path.
+- **Rewards are accumulated, not derived.** XP, streaks and achievements live in
+  `settings.progress` rather than being recomputed from the task list, so
+  deleting an old task never rewinds your level.
 - **No shared utility grab-bag.** Helpers live inside the domain that owns them
-  (`domain/date.ts`, `domain/recurrence.ts`, `domain/parser.ts`) rather than in a
-  generic `utils/` module.
+  (`domain/date.ts`, `domain/recurrence.ts`, `domain/parser.ts`,
+  `domain/progress.ts`) rather than in a generic `utils/` module.
 - **Plain CSS with tokens.** The palette from `DESIGN.md` is expressed as CSS
   custom properties, so the light and dark themes stay in lockstep without a
   build-time CSS framework.
-- **One serverless file.** The reminder endpoint handles both the cron tick
-  (`GET`) and the client sync (`POST`), which keeps the deployment surface
-  minimal.
+- **One serverless file.** The reminder endpoint handles the tick (`GET`), the
+  client sync (`POST`) and a `?dry=1` diagnostic, which keeps the deployment
+  surface minimal.
+- **Animation never blocks state.** Completing a task fires the burst
+  immediately and commits ~220ms later, so the reward feels instant while the row
+  still gets to animate. The celebration layer is `position: fixed` and
+  `pointer-events: none`, so it survives the row unmounting.
 
 ### Environment replacement
 

@@ -163,10 +163,14 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
   }
 
   /** Prefer the longest known name so "#Deep Work" beats "#Deep". */
-  function consumeKnown(prefix: string, names: string[]): string | null {
+  function consumeKnown(trigger: string, names: string[]): string | null {
     const sorted = [...names].sort((a, b) => b.length - a.length);
+    // The trigger must be escaped the same way as the name: `#` is fine raw but
+    // `\+` and `\^` are the valid spellings for those two (and `\#` would be an
+    // invalid escape under the `u` flag).
+    const safeTrigger = escapeRegExp(trigger);
     for (const name of sorted) {
-      const pattern = new RegExp(`(?:^|\\s)\\${prefix}${escapeRegExp(name)}(?=\\s|$)`, 'iu');
+      const pattern = new RegExp(`(?:^|\\s)${safeTrigger}${escapeRegExp(name)}(?=\\s|$)`, 'iu');
       if (pattern.test(working)) {
         consume(pattern);
         return name;
