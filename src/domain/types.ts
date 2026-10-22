@@ -3,6 +3,8 @@
  *
  * Everything the app knows about is described here. Records are stored verbatim
  * in IndexedDB, so these shapes double as the on-disk schema (see `src/db/database.ts`).
+ *
+ * Hierarchy:  Category  ->  Project  ->  Task  ->  Subtask (infinitely nested)
  */
 
 /** Todoist-style priority: 1 is the most urgent, 4 is the default / none. */
@@ -25,6 +27,15 @@ export interface RecurrenceRule {
   count: number | null;
 }
 
+/** A top-level grouping of projects, e.g. "Work", "Personal". */
+export interface Category {
+  id: string;
+  name: string;
+  color: string;
+  order: number;
+  createdAt: number;
+}
+
 /** A tag belongs to exactly one project. */
 export interface Tag {
   id: string;
@@ -36,6 +47,8 @@ export interface Project {
   id: string;
   name: string;
   color: string;
+  /** Owning category, or null for "Uncategorised". */
+  categoryId: string | null;
   tags: Tag[];
   order: number;
   createdAt: number;
@@ -53,17 +66,29 @@ export interface Task {
   title: string;
   notes: string;
   projectId: string | null;
+
+  /**
+   * Parent task for subtasks. Subtasks are ordinary tasks, so nesting is
+   * unlimited and every subtask supports the full metadata set.
+   */
+  parentId: string | null;
+
   place: string | null;
   priority: Priority;
 
-  /** Absolute calendar date as `YYYY-MM-DD`, or null for "someday". */
+  /** Start of the task as `YYYY-MM-DD`, or null for "someday". */
   date: string | null;
-  /** Absolute time as `HH:mm` (24h). Null when all-day or unscheduled. */
+  /** Start time as `HH:mm` (24h). Null when all-day or unscheduled. */
   time: string | null;
+  /**
+   * End of the task. Null (or equal to `date`) means the task finishes the same
+   * day it starts; a later date makes it a multi-day task.
+   */
+  endDate: string | null;
+  /** End time as `HH:mm`. Null when there is no explicit finish time. */
+  endTime: string | null;
   /** True for day-level events, false for micro-scheduled timeframes. */
   allDay: boolean;
-  /** Optional duration in minutes for a micro-scheduled timeframe. */
-  duration: number;
 
   /** Names of the project tags attached to this task. */
   tags: string[];
@@ -91,6 +116,33 @@ export interface PushSubscriptionRecord {
   updatedAt: number;
 }
 
+/**
+ * Running totals for the completion loop. Kept as accumulated numbers rather
+ * than derived from the task list so deleting old tasks never rewinds progress.
+ */
+export interface Progress {
+  xp: number;
+  totalCompleted: number;
+  /** Consecutive days with at least one completion. */
+  streak: number;
+  bestStreak: number;
+  /** `YYYY-MM-DD` of the most recent completion. */
+  lastCompletionDate: string | null;
+  /** Completions on `todayDate`, used for milestone messages. */
+  todayCount: number;
+  todayDate: string | null;
+}
+
+export const EMPTY_PROGRESS: Progress = {
+  xp: 0,
+  totalCompleted: 0,
+  streak: 0,
+  bestStreak: 0,
+  lastCompletionDate: null,
+  todayCount: 0,
+  todayDate: null,
+};
+
 export interface Settings {
   /** Single key/value bag persisted in IndexedDB. */
   theme: 'nordic-light' | 'nordic-dark';
@@ -99,6 +151,10 @@ export interface Settings {
   reminderLeadMinutes: number;
   defaultProjectId: string | null;
   lastSyncAt: number | null;
+  /** Gamification state driven by task completions. */
+  progress: Progress;
+  /** Plays a short chime on completion. Off by default. */
+  soundEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -107,6 +163,16 @@ export const DEFAULT_SETTINGS: Settings = {
   reminderLeadMinutes: 0,
   defaultProjectId: null,
   lastSyncAt: null,
+  progress: {
+    xp: 0,
+    totalCompleted: 0,
+    streak: 0,
+    bestStreak: 0,
+    lastCompletionDate: null,
+    todayCount: 0,
+    todayDate: null,
+  },
+  soundEnabled: false,
 };
 
 /** Shape of a full JSON backup produced by "Export". */
@@ -114,6 +180,7 @@ export interface BackupFile {
   app: 'tasker';
   version: number;
   exportedAt: string;
+  categories: Category[];
   projects: Project[];
   places: Place[];
   tasks: Task[];

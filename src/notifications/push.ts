@@ -54,17 +54,16 @@ export interface EnableResult {
   message: string;
 }
 
-/** Full opt-in flow triggered from Settings. */
+/**
+ * Opt-in flow.
+ *
+ * Permission is the only hard requirement: reminders are always delivered while
+ * the app is open. Background delivery additionally needs a service worker and a
+ * push subscription, which need a VAPID key — so that part is best-effort.
+ */
 export async function enableNotifications(): Promise<EnableResult> {
-  if (!notificationsSupported()) {
-    return { ok: false, message: 'This browser does not support web push notifications.' };
-  }
-  const key = vapidPublicKey();
-  if (!key) {
-    return {
-      ok: false,
-      message: 'No VAPID public key configured. Set VITE_VAPID_PUBLIC_KEY and redeploy.',
-    };
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return { ok: false, message: 'This browser cannot show notifications.' };
   }
 
   const permission = await Notification.requestPermission();
@@ -73,22 +72,26 @@ export async function enableNotifications(): Promise<EnableResult> {
   }
 
   const registration = await registerServiceWorker();
-  if (!registration) {
-    return { ok: false, message: 'Service worker registration failed.' };
+  const key = vapidPublicKey();
+
+  if (registration && key && 'PushManager' in window) {
+    try {
+      await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      const subscription =
+        existing ??
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+        }));
+      await saveSubscription(subscription);
+      return { ok: true, message: 'Notifications enabled — reminders also arrive while Tasker is closed.' };
+    } catch {
+      return { ok: true, message: 'Notifications enabled. Reminders arrive while Tasker is open.' };
+    }
   }
 
-  await navigator.serviceWorker.ready;
-
-  const existing = await registration.pushManager.getSubscription();
-  const subscription =
-    existing ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
-    }));
-
-  await saveSubscription(subscription);
-  return { ok: true, message: 'Notifications enabled on this device.' };
+  return { ok: true, message: 'Notifications enabled. Reminders arrive while Tasker is open.' };
 }
 
 export async function disableNotifications(): Promise<void> {

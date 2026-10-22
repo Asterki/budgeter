@@ -1,10 +1,12 @@
 /**
- * Settings — appearance, notification opt-in, data portability and app info.
+ * Settings — appearance, progress, notifications, workspace and data.
  */
 
-import { useRef, useState, type ChangeEvent } from 'react';
-import type { BackupFile, Settings } from '../domain/types';
-import { useTasker } from '../state/store';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import type { BackupFile, Category, Settings } from '../domain/types';
+import { formatDateShort, todayISO } from '../domain/date';
+import { completionsByDay, currentStreak, levelForXp } from '../domain/progress';
+import { CATEGORY_COLORS, useTasker } from '../state/store';
 import {
   currentSubscription,
   disableNotifications,
@@ -22,11 +24,15 @@ type Status = { tone: 'ok' | 'warn' | 'error'; text: string } | null;
 export function SettingsView({ onOpenManual }: SettingsViewProps) {
   const {
     settings,
+    categories,
     projects,
     subscriptions,
     tasks,
     places,
     updateSettings,
+    createCategory,
+    updateCategory,
+    deleteCategory,
     saveSubscription,
     removeSubscription,
     buildBackup,
@@ -39,6 +45,14 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const patch = (partial: Partial<Settings>) => updateSettings(partial);
+
+  const progress = settings.progress;
+  const level = levelForXp(progress.xp);
+  const streak = currentStreak(progress);
+  const doneToday = progress.todayDate === todayISO() ? progress.todayCount : 0;
+  const history = useMemo(() => completionsByDay(tasks, 14), [tasks]);
+  const peak = Math.max(1, ...history.map((day) => day.count));
+  const plannedToday = tasks.filter((task) => !task.completed && task.date === todayISO() && task.parentId === null).length;
 
   async function handleEnable() {
     setBusy(true);
@@ -71,7 +85,10 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
     anchor.download = `tasker-backup-${new Date().toISOString().slice(0, 10)}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
-    setStatus({ tone: 'ok', text: `Exported ${backup.tasks.length} tasks and ${backup.projects.length} projects.` });
+    setStatus({
+      tone: 'ok',
+      text: `Exported ${backup.tasks.length} tasks, ${backup.projects.length} projects and ${backup.categories.length} categories.`,
+    });
   }
 
   async function handleImport(event: ChangeEvent<HTMLInputElement>) {
@@ -90,11 +107,29 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
   }
 
   async function handleReset() {
-    if (!window.confirm('Erase every task, project and setting on this device?')) return;
+    if (!window.confirm('Erase every task, project, category and setting on this device?')) return;
     setBusy(true);
     await resetEverything();
     setStatus({ tone: 'ok', text: 'All local data was erased.' });
     setBusy(false);
+  }
+
+  function handleCategoryMenu(category: Category) {
+    const choice = window.prompt(
+      `“${category.name}”\n\n1 — Rename\n2 — Change colour\n3 — Delete\n\nEnter a number:`,
+      '1',
+    );
+    if (choice === '1') {
+      const name = window.prompt('New category name', category.name);
+      if (name?.trim()) updateCategory(category.id, { name: name.trim() });
+    } else if (choice === '2') {
+      const index = CATEGORY_COLORS.indexOf(category.color);
+      updateCategory(category.id, { color: CATEGORY_COLORS[(index + 1) % CATEGORY_COLORS.length] });
+    } else if (choice === '3') {
+      if (window.confirm(`Delete “${category.name}”? Its projects move to Uncategorised.`)) {
+        deleteCategory(category.id);
+      }
+    }
   }
 
   const pushConfigured = Boolean(vapidPublicKey());
@@ -104,7 +139,7 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
       <header className="view__header">
         <div>
           <h1 className="view__title">Settings</h1>
-          <p className="view__subtitle">Appearance, notifications, data and help</p>
+          <p className="view__subtitle">Appearance, progress, notifications, workspace and data</p>
         </div>
         <button type="button" className="button" onClick={onOpenManual}>
           Open user manual
@@ -114,8 +149,62 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
       {status && <div className={`notice notice--${status.tone}`}>{status.text}</div>}
 
       <div className="card">
-        <h2 className="card__title">Appearance</h2>
+        <h2 className="card__title">Progress</h2>
+        <div className="progress-head">
+          <div className="progress-level">
+            <span className="progress-level__badge">{level.level}</span>
+            <div>
+              <strong>Level {level.level}</strong>
+              <span className="muted">
+                {level.into} / {level.needed} XP to level {level.level + 1}
+              </span>
+            </div>
+          </div>
+          <div className="progress-bar" aria-hidden="true">
+            <span className="progress-bar__fill" style={{ width: `${Math.round(level.ratio * 100)}%` }} />
+          </div>
+        </div>
+
+        <div className="stats">
+          <span className="stat">
+            <strong>{doneToday}</strong> done today
+            {plannedToday > 0 && <span className="muted"> / {plannedToday} planned</span>}
+          </span>
+          <span className="stat">
+            <strong>🔥 {streak}</strong> day streak
+          </span>
+          <span className="stat">
+            <strong>{progress.bestStreak}</strong> best streak
+          </span>
+          <span className="stat">
+            <strong>{progress.totalCompleted}</strong> completed all time
+          </span>
+          <span className="stat">
+            <strong>{progress.xp}</strong> XP
+          </span>
+        </div>
+
+        <div className="settings-chart" aria-label="Completions over the last 14 days">
+          {history.map((day) => (
+            <span
+              key={day.date}
+              className={`settings-chart__col${day.count > 0 ? ' settings-chart__col--filled' : ''}`}
+              title={`${formatDateShort(day.date)} · ${day.count}`}
+            >
+              <span style={{ height: `${Math.max(4, (day.count / peak) * 100)}%` }} />
+            </span>
+          ))}
+        </div>
+
         <div className="card__row">
+          <label className="switch switch--boxed">
+            <input
+              type="checkbox"
+              checked={settings.soundEnabled}
+              onChange={(event) => patch({ soundEnabled: event.target.checked })}
+            />
+            <span>Completion chime</span>
+          </label>
           <label className="field">
             <span className="field__label">Theme</span>
             <select
@@ -127,29 +216,14 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
               <option value="nordic-dark">Nordic Dark</option>
             </select>
           </label>
-          <label className="field">
-            <span className="field__label">Default project</span>
-            <select
-              className="input"
-              value={settings.defaultProjectId ?? ''}
-              onChange={(event) => patch({ defaultProjectId: event.target.value || null })}
-            >
-              <option value="">None</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </div>
 
       <div className="card">
         <h2 className="card__title">Notifications</h2>
         <p className="card__hint">
-          Reminders are delivered by a Vercel cron job every minute and by web push, so they arrive
-          even when Tasker is closed.
+          Reminders are delivered while Tasker is open. If the browser grants push access, they also
+          arrive while it is closed.
         </p>
         <div className="card__row">
           <label className="field">
@@ -173,20 +247,20 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
                 {settings.notificationsEnabled ? 'Enabled' : 'Off'}
               </span>
               <span className="muted">
-                {subscriptions.length} device subscription{subscriptions.length === 1 ? '' : 's'}
+                {subscriptions.length > 0 ? 'background push ready' : 'in-app only'}
               </span>
             </div>
           </div>
         </div>
 
-        {!pushConfigured && (
-          <div className="notice notice--warn">
-            No VAPID public key configured. Set <code>VITE_VAPID_PUBLIC_KEY</code> (and the matching
-            server keys) before enabling notifications.
-          </div>
-        )}
         {!notificationsSupported() && (
-          <div className="notice notice--warn">This browser does not support web push.</div>
+          <div className="notice notice--warn">This browser does not support notifications.</div>
+        )}
+        {notificationsSupported() && !pushConfigured && (
+          <div className="notice notice--warn">
+            No VAPID key configured, so reminders only fire while Tasker is open. Add{' '}
+            <code>VITE_VAPID_PUBLIC_KEY</code> and redeploy for background push.
+          </div>
         )}
 
         <div className="card__actions">
@@ -195,6 +269,40 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
           </button>
           <button type="button" className="button" onClick={() => void handleDisable()} disabled={busy}>
             Disable
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2 className="card__title">Categories &amp; projects</h2>
+        <p className="card__hint">
+          Categories group projects; projects group tasks. Every task can nest subtasks to any depth.
+        </p>
+        {categories.length === 0 && <p className="muted">No categories yet.</p>}
+        <ul className="settings-list">
+          {categories.map((category) => (
+            <li key={category.id} className="settings-list__row">
+              <span className="dot" style={{ background: category.color }} />
+              <span className="settings-list__label">{category.name}</span>
+              <span className="muted">
+                {projects.filter((project) => project.categoryId === category.id).length} projects
+              </span>
+              <button type="button" className="link-button" onClick={() => handleCategoryMenu(category)}>
+                manage
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="card__actions">
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              const name = window.prompt('Category name — e.g. Work, Personal');
+              if (name?.trim()) createCategory(name.trim());
+            }}
+          >
+            New category
           </button>
         </div>
       </div>
@@ -213,6 +321,9 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
             <strong>{projects.length}</strong> projects
           </span>
           <span className="stat">
+            <strong>{categories.length}</strong> categories
+          </span>
+          <span className="stat">
             <strong>{places.length}</strong> places
           </span>
         </div>
@@ -227,7 +338,13 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
             Reset app
           </button>
         </div>
-        <input ref={fileInput} type="file" accept="application/json,.json" hidden onChange={(event) => void handleImport(event)} />
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={(event) => void handleImport(event)}
+        />
       </div>
 
       <div className="card">

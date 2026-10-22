@@ -15,16 +15,18 @@
  *   @place        contextual / physical place
  *   !1 … !4       priority (1 highest, 4 default)
  *   #Project      project (created on save when it does not exist yet)
+ *   ^Category     category (created on save when it does not exist yet)
  *   +tag          tag from the target project
  *   dates         today, tomorrow, tonight, fri, next monday, in 3 days,
  *                 25/10, 2026-10-25, Oct 25, 25 Oct
  *   times         3pm, 3:30pm, 15:00, at 7, noon, evening
- *   ranges        9-11am, from 9 to 11am  (sets a duration)
+ *   ranges        9-11am, from 9 to 11am  (sets a start and an end time)
+ *   spans         until friday, until 2026-11-02  (multi-day tasks)
  *   recurrence    every day, every 2 weeks, every monday, every month,
  *                 every 1st, daily / weekly / monthly / yearly
  */
 
-import type { Place, Priority, Project, RecurrenceFreq, RecurrenceRule } from './types';
+import type { Category, Place, Priority, Project, RecurrenceFreq, RecurrenceRule } from './types';
 import { nextOccurrence } from './recurrence';
 import {
   addDays,
@@ -40,11 +42,13 @@ import {
 
 export type ParsedTokenKind =
   | 'project'
+  | 'category'
   | 'place'
   | 'priority'
   | 'date'
+  | 'endDate'
   | 'time'
-  | 'duration'
+  | 'endTime'
   | 'recurrence'
   | 'tag';
 
@@ -58,11 +62,14 @@ export interface ParsedInput {
   title: string;
   projectId: string | null;
   projectName: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
   place: string | null;
   priority: Priority;
   date: string | null;
   time: string | null;
-  duration: number;
+  endDate: string | null;
+  endTime: string | null;
   allDay: boolean;
   recurrence: RecurrenceRule | null;
   tags: string[];
@@ -70,6 +77,7 @@ export interface ParsedInput {
 }
 
 export interface ParseContext {
+  categories: Category[];
   projects: Project[];
   places: Place[];
   /** Used when the text contains no `#project` token. */
@@ -130,11 +138,14 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     title: '',
     projectId: null,
     projectName: null,
+    categoryId: null,
+    categoryName: null,
     place: null,
     priority: 4,
     date: null,
     time: null,
-    duration: 0,
+    endDate: null,
+    endTime: null,
     allDay: true,
     recurrence: null,
     tags: [],
@@ -151,54 +162,78 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     return match;
   }
 
-  // ── 1. Project ────────────────────────────────────────────────────────────
-  // Prefer the longest known project name so "#Deep Work" beats "#Deep".
-  const knownProjects = [...context.projects].sort((a, b) => b.name.length - a.name.length);
-  let projectRaw: string | null = null;
-  for (const project of knownProjects) {
-    const pattern = new RegExp(`(?:^|\\s)#${escapeRegExp(project.name)}(?=\\s|$)`, 'iu');
-    if (pattern.test(working)) {
-      consume(pattern);
-      result.projectId = project.id;
-      result.projectName = project.name;
-      projectRaw = `#${project.name}`;
-      break;
+  /** Prefer the longest known name so "#Deep Work" beats "#Deep". */
+  function consumeKnown(prefix: string, names: string[]): string | null {
+    const sorted = [...names].sort((a, b) => b.length - a.length);
+    for (const name of sorted) {
+      const pattern = new RegExp(`(?:^|\\s)\\${prefix}${escapeRegExp(name)}(?=\\s|$)`, 'iu');
+      if (pattern.test(working)) {
+        consume(pattern);
+        return name;
+      }
+    }
+    return null;
+  }
+
+  // ── 1. Category ───────────────────────────────────────────────────────────
+  const knownCategory = consumeKnown(
+    '^',
+    context.categories.map((category) => category.name),
+  );
+  if (knownCategory) {
+    const match = context.categories.find((category) => category.name === knownCategory);
+    result.categoryId = match?.id ?? null;
+    result.categoryName = knownCategory;
+    tokens.push({ kind: 'category', raw: `^${knownCategory}`, label: knownCategory });
+  } else {
+    const categoryMatch = consume(/(?:^|\s)\^([\p{L}\p{N}_-]+)/u);
+    if (categoryMatch) {
+      result.categoryName = categoryMatch[1];
+      tokens.push({ kind: 'category', raw: categoryMatch[0].trim(), label: categoryMatch[1] });
     }
   }
-  if (!projectRaw) {
+
+  // ── 2. Project ────────────────────────────────────────────────────────────
+  const knownProject = consumeKnown(
+    '#',
+    context.projects.map((project) => project.name),
+  );
+  if (knownProject) {
+    const match = context.projects.find((project) => project.name === knownProject);
+    result.projectId = match?.id ?? null;
+    result.projectName = knownProject;
+    tokens.push({ kind: 'project', raw: `#${knownProject}`, label: knownProject });
+  } else {
     const projectMatch = consume(/(?:^|\s)#([\p{L}\p{N}_-]+)/u);
     if (projectMatch) {
       // Unknown name: remember it so saving the task can create the project.
       result.projectName = projectMatch[1];
-      projectRaw = projectMatch[0].trim();
+      tokens.push({ kind: 'project', raw: projectMatch[0].trim(), label: projectMatch[1] });
     }
   }
-  if (projectRaw) {
-    tokens.push({ kind: 'project', raw: projectRaw, label: result.projectName ?? projectRaw });
-  }
 
-  // ── 2. Place ──────────────────────────────────────────────────────────────
+  // ── 3. Place ──────────────────────────────────────────────────────────────
   const placeMatch = consume(/(?:^|\s)@([\p{L}\p{N}_-]+)/u);
   if (placeMatch) {
     result.place = placeMatch[1];
     tokens.push({ kind: 'place', raw: placeMatch[0].trim(), label: `@${placeMatch[1]}` });
   }
 
-  // ── 3. Priority ───────────────────────────────────────────────────────────
+  // ── 4. Priority ───────────────────────────────────────────────────────────
   const priorityMatch = consume(/(?:^|\s)!(?:p)?([1-4])(?=\s|$)/i);
   if (priorityMatch) {
     result.priority = Number(priorityMatch[1]) as Priority;
     tokens.push({ kind: 'priority', raw: priorityMatch[0].trim(), label: `Priority ${priorityMatch[1]}` });
   }
 
-  // ── 4. Recurrence (before dates, so "every monday" is not read as a date) ──
-  const recurrence = parseRecurrence(working, consume);
+  // ── 5. Recurrence (before dates, so "every monday" is not read as a date) ──
+  const recurrence = parseRecurrence(consume);
   if (recurrence) {
     result.recurrence = recurrence.rule;
     tokens.push({ kind: 'recurrence', raw: recurrence.raw, label: recurrence.label });
   }
 
-  // ── 5. Duration range ─────────────────────────────────────────────────────
+  // ── 6. Time range ("from 9 to 11am", "9-11am") ────────────────────────────
   const rangeMatch =
     consume(/\bfrom\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) ??
     consume(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
@@ -208,19 +243,18 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     const start = parseTimeToken(`${rangeMatch[1]}${rangeMatch[2] ? `:${rangeMatch[2]}` : ''}${startMeridiem ?? ''}`);
     const end = parseTimeToken(`${rangeMatch[4]}${rangeMatch[5] ? `:${rangeMatch[5]}` : ''}${endMeridiem ?? ''}`);
     if (start && end) {
-      const minutes = timeToMinutes(end) - timeToMinutes(start);
       result.time = start;
-      result.duration = minutes > 0 ? minutes : 0;
+      result.endTime = timeToMinutes(end) > timeToMinutes(start) ? end : null;
       result.allDay = false;
       tokens.push({ kind: 'time', raw: rangeMatch[0].trim(), label: start });
-      if (result.duration > 0) {
-        tokens.push({ kind: 'duration', raw: rangeMatch[0].trim(), label: `${result.duration} min` });
+      if (result.endTime) {
+        tokens.push({ kind: 'endTime', raw: rangeMatch[0].trim(), label: result.endTime });
       }
     }
   }
 
-  // ── 6. Date ───────────────────────────────────────────────────────────────
-  const date = parseDate(working, consume);
+  // ── 7. Start date ─────────────────────────────────────────────────────────
+  const date = parseDate(consume);
   if (date) {
     result.date = date.iso;
     tokens.push({ kind: 'date', raw: date.raw, label: date.label });
@@ -230,9 +264,30 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     }
   }
 
-  // ── 7. Time ───────────────────────────────────────────────────────────────
+  // ── 8. End date ("until friday") ──────────────────────────────────────────
+  // Only unambiguous keywords are accepted here; a bare "to" is reserved for
+  // end times ("3pm to 5pm") so the two can never fight over the same token.
+  const beforeEndDate = working;
+  const endKeyword = consume(/\b(?:until|til|till|through|thru)\b/i);
+  if (endKeyword) {
+    const end = parseDate(consume);
+    if (end && (!result.date || end.iso > result.date)) {
+      if (result.date) {
+        result.endDate = end.iso;
+        tokens.push({ kind: 'endDate', raw: `${endKeyword[0].trim()} ${end.raw}`, label: end.label });
+      } else {
+        // "until friday" with no start yet: treat it as the start date.
+        result.date = end.iso;
+        tokens.push({ kind: 'date', raw: end.raw, label: end.label });
+      }
+    } else {
+      working = beforeEndDate; // put the keyword back so it stays in the title
+    }
+  }
+
+  // ── 9. Start time ─────────────────────────────────────────────────────────
   if (!result.time) {
-    const time = parseTime(working, consume);
+    const time = parseTime(consume);
     if (time) {
       result.time = time.value;
       result.allDay = false;
@@ -240,7 +295,22 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     }
   }
 
-  // ── 8. Tags ───────────────────────────────────────────────────────────────
+  // ── 10. End time ("3pm to 5pm", "at 9 until 11") ──────────────────────────
+  if (result.time && !result.endTime) {
+    const endTime = consume(
+      /\b(?:until|to|till|through|thru|[-–])\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i,
+    );
+    if (endTime) {
+      const value = parseTimeToken(endTime[1]);
+      if (value && timeToMinutes(value) > timeToMinutes(result.time)) {
+        result.endTime = value;
+        result.allDay = false;
+        tokens.push({ kind: 'endTime', raw: endTime[0].trim(), label: value });
+      }
+    }
+  }
+
+  // ── 11. Tags ──────────────────────────────────────────────────────────────
   let tagMatch = consume(/(?:^|\s)\+([\p{L}\p{N}_-]+)/u);
   while (tagMatch) {
     result.tags.push(tagMatch[1]);
@@ -248,13 +318,13 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
     tagMatch = consume(/(?:^|\s)\+([\p{L}\p{N}_-]+)/u);
   }
 
-  // ── 9. Title + final defaults ─────────────────────────────────────────────
+  // ── 12. Title + final defaults ────────────────────────────────────────────
   result.title = working.replace(/\s+/g, ' ').trim();
 
   // Drop a preposition that was left behind by a consumed date/time token
   // ("Ship v2 on" -> "Ship v2").
   if ((result.date || result.time) && result.title) {
-    result.title = result.title.replace(/\s*\b(on|at|by|due|from)\b\s*$/i, '').trim();
+    result.title = result.title.replace(/\s*\b(on|at|by|due|to|until)\b\s*$/i, '').trim();
   }
 
   // A recurring task with no explicit date starts at its first occurrence.
@@ -264,11 +334,33 @@ export function parseTaskInput(input: string, context: ParseContext): ParsedInpu
 
   if (result.time && !result.date) result.date = todayISO();
   if (result.date && !result.time) result.allDay = true;
+  if (!result.endDate) result.endDate = result.date;
+  // An end time only makes sense with a start time.
+  if (!result.time || !result.endTime) result.endTime = null;
+
   if (!result.projectId && context.fallbackProjectId !== undefined) {
     result.projectId = context.fallbackProjectId;
   }
-  if (result.projectId && !result.projectName) {
-    result.projectName = context.projects.find((p) => p.id === result.projectId)?.name ?? null;
+  if (result.projectId) {
+    const project = context.projects.find((p) => p.id === result.projectId);
+    if (project) {
+      result.projectName = project.name;
+      // A project implies its category unless one was typed explicitly.
+      if (!result.categoryId) {
+        result.categoryId = project.categoryId;
+        result.categoryName =
+          context.categories.find((category) => category.id === project.categoryId)?.name ?? null;
+      }
+    }
+  }
+
+  // A category with no project resolves to its only project, if it has one.
+  if (!result.projectId && result.categoryId) {
+    const children = context.projects.filter((project) => project.categoryId === result.categoryId);
+    if (children.length === 1) {
+      result.projectId = children[0].id;
+      result.projectName = children[0].name;
+    }
   }
 
   return result;
@@ -290,7 +382,6 @@ function makeRule(freq: RecurrenceFreq, interval: number): RecurrenceRule {
 }
 
 function parseRecurrence(
-  _working: string,
   consume: (re: RegExp) => RegExpMatchArray | null,
 ): { rule: RecurrenceRule; raw: string; label: string } | null {
   const base = (rule: RecurrenceRule, raw: string, label: string) => ({ rule, raw, label });
@@ -350,7 +441,6 @@ function parseRecurrence(
 // ── Date parsing ─────────────────────────────────────────────────────────────
 
 function parseDate(
-  _working: string,
   consume: (re: RegExp) => RegExpMatchArray | null,
 ): { iso: string; raw: string; label: string; night?: boolean } | null {
   const today = todayISO();
@@ -451,7 +541,6 @@ function parseDate(
 // ── Time parsing ─────────────────────────────────────────────────────────────
 
 function parseTime(
-  _working: string,
   consume: (re: RegExp) => RegExpMatchArray | null,
 ): { value: string; raw: string } | null {
   const meridiem = consume(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);

@@ -15,6 +15,7 @@ import {
   monthLabel,
   monthMatrix,
   relativeDayLabel,
+  spanDates,
   startOfWeek,
   todayISO,
   WEEKDAYS_SHORT,
@@ -29,24 +30,34 @@ interface CalendarViewProps {
   onOpenTask: (task: Task) => void;
 }
 
+interface CalendarEntry {
+  task: Task;
+  /** True on days after the task's start date. */
+  continuation: boolean;
+}
+
 export function CalendarView({ onOpenTask }: CalendarViewProps) {
   const { tasks } = useTasker();
   const [cursor, setCursor] = useState(todayISO());
   const [mode, setMode] = useState<CalendarMode>('month');
   const [selected, setSelected] = useState(todayISO());
 
+  // A multi-day task occupies every day it spans.
   const byDate = useMemo(() => {
-    const map = new Map<string, Task[]>();
+    const map = new Map<string, CalendarEntry[]>();
     for (const task of tasks) {
-      if (!task.date) continue;
-      const bucket = map.get(task.date) ?? [];
-      bucket.push(task);
-      map.set(task.date, bucket);
+      for (const iso of spanDates(task.date, task.endDate)) {
+        const bucket = map.get(iso) ?? [];
+        bucket.push({ task, continuation: iso !== task.date });
+        map.set(iso, bucket);
+      }
     }
     for (const bucket of map.values()) {
       bucket.sort((a, b) => {
-        if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
-        return (a.time ?? '') < (b.time ?? '') ? -1 : 1;
+        if (a.task.allDay !== b.task.allDay) return a.task.allDay ? -1 : 1;
+        if ((a.task.time ?? '') !== (b.task.time ?? '')) return (a.task.time ?? '') < (b.task.time ?? '') ? -1 : 1;
+        if (a.continuation !== b.continuation) return a.continuation ? 1 : -1;
+        return a.task.priority - b.task.priority;
       });
     }
     return map;
@@ -72,7 +83,7 @@ export function CalendarView({ onOpenTask }: CalendarViewProps) {
     setSelected(todayISO());
   }
 
-  const selectedTasks = byDate.get(selected) ?? [];
+  const selectedEntries = byDate.get(selected) ?? [];
 
   return (
     <section className="view">
@@ -123,9 +134,10 @@ export function CalendarView({ onOpenTask }: CalendarViewProps) {
 
         <div className="calendar__grid">
           {weeks.flat().map((iso) => {
-            const dayTasks = byDate.get(iso) ?? [];
+            const entries = byDate.get(iso) ?? [];
             const outside = mode === 'month' && iso.slice(0, 7) !== currentMonth;
-            const openCount = dayTasks.filter((task) => !task.completed).length;
+            const openCount = entries.filter((entry) => !entry.task.completed).length;
+            const limit = mode === 'week' ? 6 : 3;
             return (
               <button
                 type="button"
@@ -145,17 +157,24 @@ export function CalendarView({ onOpenTask }: CalendarViewProps) {
               >
                 <span className="calendar__date">{Number(iso.slice(8, 10))}</span>
                 <span className="calendar__items">
-                  {dayTasks.slice(0, mode === 'week' ? 6 : 3).map((task) => (
+                  {entries.slice(0, limit).map((entry) => (
                     <span
-                      key={task.id}
-                      className={`calendar__item calendar__item--p${task.priority}${task.completed ? ' calendar__item--done' : ''}`}
+                      key={`${entry.task.id}-${iso}`}
+                      className={[
+                        'calendar__item',
+                        `calendar__item--p${entry.task.priority}`,
+                        entry.task.completed ? 'calendar__item--done' : '',
+                        entry.continuation ? 'calendar__item--span' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
                     >
-                      {!task.allDay && task.time ? `${task.time} ` : ''}
-                      {task.title}
+                      {!entry.task.allDay && entry.task.time && !entry.continuation ? `${entry.task.time} ` : ''}
+                      {entry.task.title}
                     </span>
                   ))}
-                  {dayTasks.length > (mode === 'week' ? 6 : 3) && (
-                    <span className="calendar__more">+{dayTasks.length - (mode === 'week' ? 6 : 3)} more</span>
+                  {entries.length > limit && (
+                    <span className="calendar__more">+{entries.length - limit} more</span>
                   )}
                 </span>
                 {openCount > 0 && <span className="calendar__badge">{openCount}</span>}
@@ -168,17 +187,22 @@ export function CalendarView({ onOpenTask }: CalendarViewProps) {
       <div className="calendar__day">
         <header className="group__header">
           <span className="group__title">{formatDate(selected)}</span>
-          <span className="group__count">{selectedTasks.length}</span>
+          <span className="group__count">{selectedEntries.length}</span>
         </header>
 
         <QuickAdd defaultDate={selected} compact placeholder={`Add a task on ${formatDate(selected)}…`} />
 
-        {selectedTasks.length === 0 ? (
+        {selectedEntries.length === 0 ? (
           <p className="muted">No tasks scheduled for this day.</p>
         ) : (
           <ul className="task-list">
-            {selectedTasks.map((task) => (
-              <TaskRow key={task.id} task={task} onOpen={onOpenTask} />
+            {selectedEntries.map((entry) => (
+              <TaskRow
+                key={`${entry.task.id}-${selected}`}
+                task={entry.task}
+                onOpen={onOpenTask}
+                continuation={entry.continuation}
+              />
             ))}
           </ul>
         )}

@@ -3,14 +3,18 @@
  * desktop side panel — the content is identical, only the chrome differs.
  */
 
+import { useMemo } from 'react';
 import type { Priority, Task } from '../domain/types';
-import { formatDate, todayISO } from '../domain/date';
+import { formatDate, formatTime, spanLength, todayISO } from '../domain/date';
 import { RecurrenceEditor } from './RecurrenceEditor';
-import { useTasker } from '../state/store';
+import { TaskTree } from './TaskTree';
+import { QuickAdd } from './QuickAdd';
+import { useTaskChildren, useTasker } from '../state/store';
 
 interface TaskDetailProps {
   task: Task;
   onClose: () => void;
+  onOpenTask: (task: Task) => void;
 }
 
 const PRIORITIES: { value: Priority; label: string }[] = [
@@ -20,12 +24,75 @@ const PRIORITIES: { value: Priority; label: string }[] = [
   { value: 4, label: 'P4 · None' },
 ];
 
-export function TaskDetail({ task, onClose }: TaskDetailProps) {
-  const { projects, places, updateTask, deleteTask, duplicateTask, addTag, removeTag } = useTasker();
-  const project = projects.find((p) => p.id === task.projectId) ?? null;
+export function TaskDetail({ task, onClose, onOpenTask }: TaskDetailProps) {
+  const {
+    categories,
+    projects,
+    places,
+    tasks,
+    updateTask,
+    deleteTask,
+    duplicateTask,
+    descendantIds,
+    addTag,
+    removeTag,
+  } = useTasker();
+  const childrenMap = useTaskChildren();
+
+  const children = childrenMap.get(task.id) ?? [];
+  const parent = task.parentId ? tasks.find((item) => item.id === task.parentId) ?? null : null;
+  const ancestors = useMemo(() => {
+    const chain: Task[] = [];
+    let cursor = parent;
+    const guard = new Set<string>();
+    while (cursor && !guard.has(cursor.id)) {
+      guard.add(cursor.id);
+      chain.unshift(cursor);
+      cursor = cursor.parentId ? tasks.find((item) => item.id === cursor!.parentId) ?? null : null;
+    }
+    return chain;
+  }, [parent, tasks]);
+
+  const categoryId = task.projectId
+    ? projects.find((project) => project.id === task.projectId)?.categoryId ?? null
+    : null;
 
   function patch(changes: Partial<Task>) {
     updateTask(task.id, changes);
+  }
+
+  /** Projects grouped by category, for the hierarchical picker. */
+  const grouped = useMemo(() => {
+    const groups: { key: string; label: string; projects: typeof projects }[] = categories.map((category) => ({
+      key: category.id,
+      label: category.name,
+      projects: projects.filter((project) => project.categoryId === category.id),
+    }));
+    const loose = projects.filter((project) => !project.categoryId);
+    if (loose.length > 0) groups.push({ key: 'none', label: 'Uncategorised', projects: loose });
+    return groups.filter((group) => group.projects.length > 0);
+  }, [categories, projects]);
+
+  const project = projects.find((item) => item.id === task.projectId) ?? null;
+  const days = spanLength(task.date, task.endDate);
+
+  /** Keeps the end of the range coherent with its start. */
+  function patchStart(nextDate: string | null, nextTime: string | null) {
+    const endDate = task.endDate && nextDate && task.endDate > nextDate ? task.endDate : nextDate;
+    patch({ date: nextDate, time: nextTime, endDate, allDay: !nextTime });
+  }
+
+  function patchEnd(nextEndDate: string | null) {
+    const clamped = task.date && nextEndDate && nextEndDate < task.date ? task.date : nextEndDate;
+    patch({ endDate: clamped });
+  }
+
+  function patchEndTime(nextEndTime: string | null) {
+    if (nextEndTime && task.time && nextEndTime <= task.time) {
+      patch({ endTime: task.time });
+      return;
+    }
+    patch({ endTime: nextEndTime });
   }
 
   function toggleTag(name: string) {
@@ -35,6 +102,22 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
 
   return (
     <div className="detail">
+      {(ancestors.length > 0 || parent) && (
+        <nav className="detail__breadcrumb" aria-label="Task hierarchy">
+          {ancestors.map((ancestor) => (
+            <button key={ancestor.id} type="button" className="link-button" onClick={() => onOpenTask(ancestor)}>
+              {ancestor.title}
+            </button>
+          ))}
+          {parent && (
+            <button type="button" className="link-button" onClick={() => onOpenTask(parent)}>
+              {parent.title}
+            </button>
+          )}
+          <span className="detail__breadcrumb-current">{task.title}</span>
+        </nav>
+      )}
+
       <input
         className="detail__title"
         value={task.title}
@@ -61,10 +144,14 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
             onChange={(event) => patch({ projectId: event.target.value || null, tags: [] })}
           >
             <option value="">No project</option>
-            {projects.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
+            {grouped.map((group) => (
+              <optgroup key={group.key} label={group.label}>
+                {group.projects.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
@@ -101,12 +188,24 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
         </label>
 
         <label className="field">
-          <span className="field__label">Date</span>
+          <span className="field__label">Start date</span>
           <input
             className="input"
             type="date"
             value={task.date ?? ''}
-            onChange={(event) => patch({ date: event.target.value || null })}
+            onChange={(event) => patchStart(event.target.value || null, task.allDay ? null : task.time)}
+          />
+        </label>
+
+        <label className="field">
+          <span className="field__label">End date {days > 1 ? `· ${days} days` : ''}</span>
+          <input
+            className="input"
+            type="date"
+            min={task.date ?? undefined}
+            value={task.endDate ?? task.date ?? ''}
+            disabled={!task.date}
+            onChange={(event) => patchEnd(event.target.value || null)}
           />
         </label>
 
@@ -117,7 +216,9 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
               <input
                 type="checkbox"
                 checked={task.allDay}
-                onChange={(event) => patch({ allDay: event.target.checked, time: event.target.checked ? null : task.time })}
+                onChange={(event) =>
+                  patch({ allDay: event.target.checked, time: event.target.checked ? null : task.time, endTime: event.target.checked ? null : task.endTime })
+                }
               />
               <span>All-day</span>
             </label>
@@ -126,23 +227,20 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
               type="time"
               value={task.time ?? ''}
               disabled={task.allDay}
+              aria-label="Start time"
               onChange={(event) => patch({ time: event.target.value || null, allDay: false })}
+            />
+            <span className="field__suffix">to</span>
+            <input
+              className="input"
+              type="time"
+              value={task.endTime ?? ''}
+              disabled={task.allDay}
+              aria-label="End time"
+              onChange={(event) => patchEndTime(event.target.value || null)}
             />
           </div>
         </div>
-
-        <label className="field">
-          <span className="field__label">Duration (minutes)</span>
-          <input
-            className="input input--num"
-            type="number"
-            min={0}
-            step={5}
-            value={task.duration || ''}
-            placeholder="—"
-            onChange={(event) => patch({ duration: Math.max(0, Number(event.target.value) || 0) })}
-          />
-        </label>
 
         <label className="field">
           <span className="field__label">Roadmap lane</span>
@@ -207,15 +305,44 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
         </div>
       )}
 
-      <RecurrenceEditor
-        value={task.recurrence}
-        dateISO={task.date}
-        onChange={(rule) => patch({ recurrence: rule })}
-      />
+      <RecurrenceEditor value={task.recurrence} dateISO={task.date} onChange={(rule) => patch({ recurrence: rule })} />
+
+      <section className="detail__subtasks">
+        <header className="group__header">
+          <span className="group__title">Subtasks</span>
+          <span className="group__count">{children.length}</span>
+        </header>
+
+        <QuickAdd
+          compact
+          parentId={task.id}
+          projectId={task.projectId}
+          defaultDate={task.date}
+          placeholder="Add a subtask — same syntax as any task…"
+        />
+
+        {children.length > 0 && (
+          <TaskTree
+            tasks={children}
+            childrenMap={childrenMap}
+            onOpenTask={onOpenTask}
+            showProject={false}
+          />
+        )}
+      </section>
 
       <div className="detail__meta">
         <span>Created {formatDate(new Date(task.createdAt).toISOString().slice(0, 10))}</span>
-        {task.completed && <span className="meta--muted">Completed</span>}
+        {task.date && task.time && (
+          <span className="meta--muted">
+            {formatTime(task.time)}
+            {task.endTime ? ` – ${formatTime(task.endTime)}` : ''}
+          </span>
+        )}
+        {categoryId && <span className="meta--muted">{categories.find((c) => c.id === categoryId)?.name}</span>}
+        {descendantIds(task.id).length > 0 && (
+          <span className="meta--muted">{descendantIds(task.id).length} nested</span>
+        )}
       </div>
 
       <div className="detail__actions">
@@ -229,19 +356,21 @@ export function TaskDetail({ task, onClose }: TaskDetailProps) {
         >
           Duplicate
         </button>
-        <button
-          type="button"
-          className="button"
-          onClick={() => patch({ date: todayISO() })}
-        >
+        <button type="button" className="button" onClick={() => patch({ date: todayISO(), endDate: todayISO() })}>
           Schedule today
         </button>
         <button
           type="button"
           className="button button--danger"
           onClick={() => {
-            deleteTask(task.id);
-            onClose();
+            const nested = descendantIds(task.id).length;
+            const message = nested
+              ? `Delete “${task.title}” and its ${nested} nested task${nested === 1 ? '' : 's'}?`
+              : `Delete “${task.title}”?`;
+            if (window.confirm(message)) {
+              deleteTask(task.id);
+              onClose();
+            }
           }}
         >
           Delete

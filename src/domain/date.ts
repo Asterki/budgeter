@@ -100,6 +100,48 @@ export function dateRange(startISO: string, endISO: string): string[] {
   return out;
 }
 
+/**
+ * Every calendar day a task occupies, clamped to `max` days as a safety valve
+ * for absurd ranges. Returns `[]` when there is no start date.
+ */
+export function spanDates(dateISO: string | null, endISO: string | null, max = 120): string[] {
+  if (!dateISO) return [];
+  const last = endISO && endISO > dateISO ? endISO : dateISO;
+  const out: string[] = [];
+  let cursor = dateISO;
+  while (cursor <= last && out.length < max) {
+    out.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return out;
+}
+
+/** Number of calendar days a task covers (1 for a same-day task). */
+export function spanLength(dateISO: string | null, endISO: string | null): number {
+  if (!dateISO) return 0;
+  const last = endISO && endISO > dateISO ? endISO : dateISO;
+  return daysBetween(dateISO, last) + 1;
+}
+
+/**
+ * Human label for a task's schedule.
+ * `Oct 24` · `Today` · `Oct 24 – 26` · `Oct 24 – Nov 2`
+ */
+export function formatTaskRange(
+  dateISO: string | null,
+  endISO: string | null,
+  relative = true,
+): string {
+  if (!dateISO) return 'No date';
+  const multiDay = Boolean(endISO && endISO > dateISO);
+  if (!multiDay) return relative ? relativeDayLabel(dateISO) : formatDateShort(dateISO);
+
+  const start = relative ? relativeDayLabel(dateISO) : formatDateShort(dateISO);
+  const sameYear = dateISO.slice(0, 4) === (endISO as string).slice(0, 4);
+  const end = formatDateShort(endISO as string);
+  return sameYear ? `${start} – ${end}` : `${start} ${dateISO.slice(0, 4)} – ${end} ${(endISO as string).slice(0, 4)}`;
+}
+
 /** A 6x7 grid of ISO dates covering the month that contains `iso`. */
 export function monthMatrix(iso: string): string[][] {
   const first = startOfMonth(iso);

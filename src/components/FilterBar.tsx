@@ -6,8 +6,8 @@
 import type { Ref } from 'react';
 import type { Priority } from '../domain/types';
 
-export type SortKey = 'manual' | 'date' | 'priority' | 'created' | 'alpha';
-export type GroupKey = 'none' | 'date' | 'project' | 'priority' | 'lane' | 'place';
+export type SortKey = 'date' | 'priority' | 'created' | 'alpha' | 'manual';
+export type GroupKey = 'day' | 'project' | 'priority' | 'place' | 'lane' | 'none';
 
 export interface FilterState {
   search: string;
@@ -20,7 +20,7 @@ export interface FilterState {
 export const DEFAULT_FILTERS: FilterState = {
   search: '',
   sort: 'date',
-  groupBy: 'date',
+  groupBy: 'day',
   priority: 'all',
   showCompleted: false,
 };
@@ -58,6 +58,22 @@ export function FilterBar({ filters, onChange, resultCount, inputRef }: FilterBa
       </div>
 
       <label className="filter-bar__control">
+        <span className="sr-only">Group by</span>
+        <select
+          className="input"
+          value={filters.groupBy}
+          onChange={(event) => patch({ groupBy: event.target.value as GroupKey })}
+        >
+          <option value="day">Group: Date</option>
+          <option value="project">Group: Project</option>
+          <option value="priority">Group: Priority</option>
+          <option value="place">Group: Place</option>
+          <option value="lane">Group: Lane</option>
+          <option value="none">Group: None</option>
+        </select>
+      </label>
+
+      <label className="filter-bar__control">
         <span className="sr-only">Sort by</span>
         <select className="input" value={filters.sort} onChange={(event) => patch({ sort: event.target.value as SortKey })}>
           <option value="date">Sort: Due date</option>
@@ -65,22 +81,6 @@ export function FilterBar({ filters, onChange, resultCount, inputRef }: FilterBa
           <option value="created">Sort: Created</option>
           <option value="alpha">Sort: A → Z</option>
           <option value="manual">Sort: Manual</option>
-        </select>
-      </label>
-
-      <label className="filter-bar__control">
-        <span className="sr-only">Group by</span>
-        <select
-          className="input"
-          value={filters.groupBy}
-          onChange={(event) => patch({ groupBy: event.target.value as GroupKey })}
-        >
-          <option value="date">Group: Date</option>
-          <option value="project">Group: Project</option>
-          <option value="priority">Group: Priority</option>
-          <option value="place">Group: Place</option>
-          <option value="lane">Group: Lane</option>
-          <option value="none">Group: None</option>
         </select>
       </label>
 

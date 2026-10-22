@@ -11,17 +11,17 @@ import { TopBar } from './components/TopBar';
 import { BottomSheet } from './components/BottomSheet';
 import { QuickAdd } from './components/QuickAdd';
 import { TaskDetail } from './components/TaskDetail';
+import { CelebrationProvider } from './components/Celebration';
 import { TasksView } from './views/TasksView';
 import { CalendarView } from './views/CalendarView';
 import { RoadmapView } from './views/RoadmapView';
 import { SettingsView } from './views/SettingsView';
 import { UserManual } from './docs/UserManual';
 import { INITIAL_SELECTION, type NavSelection, type ViewKey } from './state/navigation';
-import { useTasker, PROJECT_COLORS } from './state/store';
+import { CATEGORY_COLORS, PROJECT_COLORS, useTasker } from './state/store';
 import { useInterval, useMediaQuery } from './state/hooks';
 import { buildReminders } from './notifications/push';
-import { relativeDayLabel, todayISO } from './domain/date';
-import type { Task } from './domain/types';
+import type { Category, Project, Task } from './domain/types';
 
 type FocusTarget = 'quickadd' | 'search' | null;
 
@@ -39,12 +39,27 @@ const TAB_ICONS: Record<ViewKey, string> = {
   settings: '⚙',
 };
 
+const LANDING: NavSelection = INITIAL_SELECTION;
+
 export function App() {
-  const { ready, tasks, projects, settings, updateSettings, updateTask, createProject, updateProject, deleteProject } =
-    useTasker();
+  const {
+    ready,
+    tasks,
+    categories,
+    projects,
+    settings,
+    updateSettings,
+    updateTask,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+    createProject,
+    updateProject,
+    deleteProject,
+  } = useTasker();
   const isMobile = useMediaQuery('(max-width: 860px)');
 
-  const [selection, setSelection] = useState<NavSelection>(INITIAL_SELECTION);
+  const [selection, setSelection] = useState<NavSelection>(LANDING);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [focusTarget, setFocusTarget] = useState<FocusTarget>(null);
@@ -69,7 +84,7 @@ export function App() {
     setSelection((prev) =>
       prev.view === 'tasks' && (target !== 'quickadd' || prev.scope !== 'completed')
         ? prev
-        : { ...prev, view: 'tasks', scope: 'all', projectId: null, place: null },
+        : { ...prev, view: 'tasks', scope: 'scheduled', projectId: null, categoryId: null, place: null },
     );
     setFocusTarget(target);
   }, []);
@@ -119,7 +134,7 @@ export function App() {
           requestFocus('search');
           break;
         case '1':
-          setSelection({ view: 'tasks', scope: 'all', projectId: null, place: null });
+          setSelection(LANDING);
           break;
         case '2':
           setSelection((prev) => ({ ...prev, view: 'calendar' }));
@@ -131,7 +146,7 @@ export function App() {
           setSelection((prev) => ({ ...prev, view: 'settings' }));
           break;
         case 't':
-          setSelection({ view: 'tasks', scope: 'today', projectId: null, place: null });
+          setSelection({ ...LANDING, scope: 'today' });
           break;
         case '?':
           setManualOpen((open) => !open);
@@ -146,8 +161,8 @@ export function App() {
   }, [requestFocus]);
 
   // ── Foreground reminder watcher ───────────────────────────────────────────
-  // The Vercel cron covers the closed-app case; this covers the open-tab case
-  // so reminders are never late while the user is looking at the app.
+  // Vercel's cron is disabled, so notifications are delivered here while the
+  // app is open (and by any external trigger when it is not).
   useInterval(
     () => {
       if (!settings.notificationsEnabled || !('serviceWorker' in navigator)) return;
@@ -172,35 +187,86 @@ export function App() {
     ready && settings.notificationsEnabled ? 30_000 : null,
   );
 
-  function handleCreateProject() {
-    const name = window.prompt('Project name');
+  /* ── Category + project management (prompt driven, dependency free) ─────── */
+
+  function handleCreateCategory() {
+    const name = window.prompt('Category name — e.g. Work, Personal');
     if (!name?.trim()) return;
-    const project = createProject(name.trim());
-    setSelection({ view: 'tasks', scope: 'project', projectId: project.id, place: null });
+    const category = createCategory(name.trim());
+    setSelection({ ...LANDING, scope: 'category', categoryId: category.id });
   }
 
-  /** Rename / recolour / delete a project — prompt-driven and dependency-free. */
-  function handleProjectMenu(project: (typeof projects)[number]) {
+  function handleCategoryMenu(category: Category) {
     const choice = window.prompt(
-      `“${project.name}”\n\n1 — Rename\n2 — Change colour\n3 — Delete project\n\nEnter a number:`,
+      `“${category.name}”\n\n1 — Rename\n2 — Change colour\n3 — Delete category\n\nEnter a number:`,
       '1',
     );
     if (choice === '1') {
+      const name = window.prompt('New category name', category.name);
+      if (name?.trim()) updateCategory(category.id, { name: name.trim() });
+    } else if (choice === '2') {
+      const index = CATEGORY_COLORS.indexOf(category.color);
+      updateCategory(category.id, { color: CATEGORY_COLORS[(index + 1) % CATEGORY_COLORS.length] });
+    } else if (choice === '3') {
+      if (window.confirm(`Delete “${category.name}”? Its projects move to Uncategorised.`)) {
+        deleteCategory(category.id);
+        setSelection(LANDING);
+      }
+    }
+  }
+
+  function handleCreateProject(categoryId: string | null) {
+    const name = window.prompt(
+      categoryId
+        ? `Project name in “${categories.find((c) => c.id === categoryId)?.name ?? 'category'}”`
+        : 'Project name',
+    );
+    if (!name?.trim()) return;
+    const project = createProject(name.trim(), { categoryId });
+    setSelection({ ...LANDING, scope: 'project', projectId: project.id });
+  }
+
+  function handleProjectMenu(project: Project) {
+    const current = categories.find((c) => c.id === project.categoryId)?.name ?? 'Uncategorised';
+    const choice = window.prompt(
+      `“${project.name}”  (in ${current})\n\n1 — Rename\n2 — Change colour\n3 — Move to category\n4 — Delete project\n\nEnter a number:`,
+      '1',
+    );
+
+    if (choice === '1') {
       const name = window.prompt('New project name', project.name);
       if (name?.trim()) updateProject(project.id, { name: name.trim() });
-    } else if (choice === '2') {
+      return;
+    }
+    if (choice === '2') {
       const index = PROJECT_COLORS.indexOf(project.color);
       updateProject(project.id, { color: PROJECT_COLORS[(index + 1) % PROJECT_COLORS.length] });
-    } else if (choice === '3') {
+      return;
+    }
+    if (choice === '3') {
+      if (categories.length === 0) {
+        window.alert('Create a category first.');
+        return;
+      }
+      const options = categories.map((category, index) => `${index + 1} — ${category.name}`).join('\n');
+      const picked = window.prompt(`${options}\n0 — Uncategorised\n\nMove to which category?`, '1');
+      const index = Number(picked);
+      if (Number.isNaN(index)) return;
+      updateProject(project.id, { categoryId: index === 0 ? null : categories[index - 1]?.id ?? null });
+      return;
+    }
+    if (choice === '4') {
       if (window.confirm(`Delete “${project.name}”? Its tasks move to the Inbox.`)) {
         deleteProject(project.id);
-        setSelection({ view: 'tasks', scope: 'all', projectId: null, place: null });
+        setSelection(LANDING);
       }
     }
   }
 
   const viewTitle = useMemo(() => {
     switch (selection.scope) {
+      case 'scheduled':
+        return 'Scheduled';
       case 'today':
         return 'Today';
       case 'upcoming':
@@ -211,15 +277,21 @@ export function App() {
         return 'Completed';
       case 'project':
         return projects.find((project) => project.id === selection.projectId)?.name ?? 'Project';
+      case 'category':
+        return selection.categoryId
+          ? categories.find((category) => category.id === selection.categoryId)?.name ?? 'Category'
+          : 'Uncategorised';
       case 'place':
         return `@${selection.place}`;
       case 'all':
       default:
         return 'All tasks';
     }
-  }, [selection, projects]);
+  }, [selection, projects, categories]);
 
-  const detailBody = openTask ? <TaskDetail task={openTask} onClose={() => setOpenTaskId(null)} /> : null;
+  const detailBody = openTask ? (
+    <TaskDetail task={openTask} onClose={() => setOpenTaskId(null)} onOpenTask={onOpenTask} />
+  ) : null;
 
   if (!ready) {
     return (
@@ -231,143 +303,137 @@ export function App() {
   }
 
   return (
-    <div className={`app${isMobile ? ' app--mobile' : ' app--desktop'}`}>
-      <TopBar
-        theme={settings.theme}
-        onToggleTheme={() =>
-          updateSettings({ theme: settings.theme === 'nordic-light' ? 'nordic-dark' : 'nordic-light' })
-        }
-        onFocusSearch={() => requestFocus('search')}
-        onFocusQuickAdd={() => requestFocus('quickadd')}
-        onOpenManual={() => setManualOpen(true)}
-      />
+    <CelebrationProvider>
+      <div className={`app${isMobile ? ' app--mobile' : ' app--desktop'}`}>
+        <TopBar
+          theme={settings.theme}
+          onToggleTheme={() =>
+            updateSettings({ theme: settings.theme === 'nordic-light' ? 'nordic-dark' : 'nordic-light' })
+          }
+          onFocusSearch={() => requestFocus('search')}
+          onFocusQuickAdd={() => requestFocus('quickadd')}
+          onOpenManual={() => setManualOpen(true)}
+        />
 
-      <div className="app__body">
-        {!isMobile && (
-          <Sidebar
-            selection={selection}
-            onSelect={navigate}
-            onCreateProject={handleCreateProject}
-            onProjectMenu={handleProjectMenu}
-            onOpenManual={() => setManualOpen(true)}
-          />
-        )}
-
-        <main className="workspace">
-          {selection.view === 'tasks' && (
-            <TasksView
-              title={viewTitle}
-              subtitle={selection.scope === 'today' ? `Due ${relativeDayLabel(todayISO()).toLowerCase()}` : undefined}
-              scope={selection.scope}
-              projectId={selection.projectId}
-              place={selection.place}
-              onOpenTask={onOpenTask}
-              focusTarget={focusTarget}
-              onFocusHandled={() => setFocusTarget(null)}
+        <div className="app__body">
+          {!isMobile && (
+            <Sidebar
+              selection={selection}
+              onSelect={navigate}
+              onCreateCategory={handleCreateCategory}
+              onCreateProject={handleCreateProject}
+              onCategoryMenu={handleCategoryMenu}
+              onProjectMenu={handleProjectMenu}
+              onOpenManual={() => setManualOpen(true)}
             />
           )}
-          {selection.view === 'calendar' && <CalendarView onOpenTask={onOpenTask} />}
-          {selection.view === 'roadmap' && <RoadmapView onOpenTask={onOpenTask} />}
-          {selection.view === 'settings' && <SettingsView onOpenManual={() => setManualOpen(true)} />}
-        </main>
 
-        {!isMobile && detailBody && (
-          <aside className="panel" aria-label="Task details">
-            <div className="panel__header">
-              <span className="panel__title">Task details</span>
-              <button type="button" className="icon-button" onClick={() => setOpenTaskId(null)} aria-label="Close panel">
-                ✕
-              </button>
-            </div>
-            <div className="panel__body">{detailBody}</div>
-          </aside>
-        )}
-      </div>
+          <main className="workspace">
+            {selection.view === 'tasks' && (
+              <TasksView
+                title={viewTitle}
+                scope={selection.scope}
+                projectId={selection.projectId}
+                categoryId={selection.categoryId}
+                place={selection.place}
+                onOpenTask={onOpenTask}
+                focusTarget={focusTarget}
+                onFocusHandled={() => setFocusTarget(null)}
+                autoFocusQuickAdd={!isMobile && selection.scope === 'scheduled'}
+              />
+            )}
+            {selection.view === 'calendar' && <CalendarView onOpenTask={onOpenTask} />}
+            {selection.view === 'roadmap' && <RoadmapView onOpenTask={onOpenTask} />}
+            {selection.view === 'settings' && <SettingsView onOpenManual={() => setManualOpen(true)} />}
+          </main>
 
-      {isMobile && (
-        <>
-          <button type="button" className="fab" onClick={() => setMobileCreateOpen(true)} aria-label="Add task">
-            ＋
-          </button>
-
-          <nav className="tabbar" aria-label="Views">
-            {(['tasks', 'calendar', 'roadmap', 'settings'] as ViewKey[]).map((key) => (
-              <button
-                key={key}
-                type="button"
-                className={`tabbar__item${selection.view === key ? ' tabbar__item--active' : ''}`}
-                onClick={() => setSelection((prev) => ({ ...prev, view: key }))}
-              >
-                <span className="tabbar__icon" aria-hidden="true">
-                  {TAB_ICONS[key]}
-                </span>
-                {TAB_LABELS[key]}
-              </button>
-            ))}
-          </nav>
-        </>
-      )}
-
-      {isMobile && (
-        <BottomSheet
-          open={mobileCreateOpen}
-          title="New task"
-          onClose={() => setMobileCreateOpen(false)}
-          accent={settings.theme === 'nordic-dark' ? '#8FA8BE' : '#263BAA'}
-        >
-          <div className="sheet-create">
-            <QuickAddCapture onCreated={() => setMobileCreateOpen(false)} />
-            <p className="muted">
-              Tip: type <code>@place</code>, <code>!1</code> and <code>#Project</code> to set metadata
-              as you write.
-            </p>
-          </div>
-        </BottomSheet>
-      )}
-
-      {isMobile ? (
-        <BottomSheet open={!!detailBody} title="Task details" onClose={() => setOpenTaskId(null)}>
-          {detailBody}
-        </BottomSheet>
-      ) : null}
-
-      {isMobile ? (
-        <BottomSheet open={manualOpen} title="User manual" onClose={() => setManualOpen(false)}>
-          <UserManual />
-        </BottomSheet>
-      ) : (
-        manualOpen && (
-          <div className="modal-backdrop" onClick={() => setManualOpen(false)} role="presentation">
-            <div className="modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="User manual">
-              <header className="modal__header">
-                <span className="modal__title">User manual</span>
-                <button type="button" className="icon-button" onClick={() => setManualOpen(false)} aria-label="Close manual">
+          {!isMobile && detailBody && (
+            <aside className="panel" aria-label="Task details">
+              <div className="panel__header">
+                <span className="panel__title">Task details</span>
+                <button type="button" className="icon-button" onClick={() => setOpenTaskId(null)} aria-label="Close panel">
                   ✕
                 </button>
-              </header>
-              <div className="modal__body">
-                <UserManual />
+              </div>
+              <div className="panel__body">{detailBody}</div>
+            </aside>
+          )}
+        </div>
+
+        {isMobile && (
+          <>
+            <button type="button" className="fab" onClick={() => setMobileCreateOpen(true)} aria-label="Add task">
+              ＋
+            </button>
+
+            <nav className="tabbar" aria-label="Views">
+              {(['tasks', 'calendar', 'roadmap', 'settings'] as ViewKey[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`tabbar__item${selection.view === key ? ' tabbar__item--active' : ''}`}
+                  onClick={() => setSelection((prev) => ({ ...prev, view: key }))}
+                >
+                  <span className="tabbar__icon" aria-hidden="true">
+                    {TAB_ICONS[key]}
+                  </span>
+                  {TAB_LABELS[key]}
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
+
+        {isMobile && (
+          <BottomSheet open={mobileCreateOpen} title="New task" onClose={() => setMobileCreateOpen(false)}>
+            <div className="sheet-create">
+              <QuickAdd
+                autoFocus
+                onSubmitted={() => setMobileCreateOpen(false)}
+                placeholder="What needs doing? Add @place, !1, #Project…"
+              />
+              <p className="muted">
+                Type <code>#</code> for projects, <code>^</code> for categories, <code>@</code> for places
+                and <code>!</code> for priority.
+              </p>
+            </div>
+          </BottomSheet>
+        )}
+
+        {isMobile && (
+          <BottomSheet open={!!detailBody} title="Task details" onClose={() => setOpenTaskId(null)}>
+            {detailBody}
+          </BottomSheet>
+        )}
+
+        {isMobile ? (
+          <BottomSheet open={manualOpen} title="User manual" onClose={() => setManualOpen(false)}>
+            <UserManual />
+          </BottomSheet>
+        ) : (
+          manualOpen && (
+            <div className="modal-backdrop" onClick={() => setManualOpen(false)} role="presentation">
+              <div
+                className="modal"
+                onClick={(event) => event.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label="User manual"
+              >
+                <header className="modal__header">
+                  <span className="modal__title">User manual</span>
+                  <button type="button" className="icon-button" onClick={() => setManualOpen(false)} aria-label="Close manual">
+                    ✕
+                  </button>
+                </header>
+                <div className="modal__body">
+                  <UserManual />
+                </div>
               </div>
             </div>
-          </div>
-        )
-      )}
-    </div>
-  );
-}
-
-/**
- * The mobile create sheet needs the quick-add field mounted inside the sheet
- * and focused straight away, so it gets its own tiny wrapper.
- */
-function QuickAddCapture({ onCreated }: { onCreated: () => void }) {
-  return (
-    <div
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') onCreated();
-      }}
-    >
-      <QuickAdd autoFocus />
-    </div>
+          )
+        )}
+      </div>
+    </CelebrationProvider>
   );
 }

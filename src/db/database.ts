@@ -2,18 +2,27 @@
  * IndexedDB persistence layer.
  *
  * Tasker is local-first: this module is the single source of truth for every
- * task, project, place, push subscription and setting. There is no server-side
- * database — the app works fully offline.
+ * task, project, category, place, push subscription and setting. There is no
+ * server-side database — the app works fully offline.
  */
 
-import type { Place, Project, PushSubscriptionRecord, Settings, Task } from '../domain/types';
+import type {
+  Category,
+  Place,
+  Project,
+  PushSubscriptionRecord,
+  Settings,
+  Task,
+} from '../domain/types';
 import { DEFAULT_SETTINGS } from '../domain/types';
 
 const DB_NAME = 'tasker';
-const DB_VERSION = 1;
+/** v2 added the `categories` store and the multi-day / subtask fields. */
+const DB_VERSION = 2;
 
 export const STORE = {
   tasks: 'tasks',
+  categories: 'categories',
   projects: 'projects',
   places: 'places',
   subscriptions: 'subscriptions',
@@ -55,6 +64,9 @@ export function openDatabase(): Promise<IDBDatabase> {
         tasks.createIndex('byDate', 'date');
         tasks.createIndex('byProject', 'projectId');
         tasks.createIndex('byCompleted', 'completed');
+      }
+      if (!db.objectStoreNames.contains(STORE.categories)) {
+        db.createObjectStore(STORE.categories, { keyPath: 'id' });
       }
       if (!db.objectStoreNames.contains(STORE.projects)) {
         db.createObjectStore(STORE.projects, { keyPath: 'id' });
@@ -112,8 +124,54 @@ async function clearStore(store: StoreName): Promise<void> {
   await transactionDone(tx);
 }
 
+/* ── Schema normalisation ─────────────────────────────────────────────────── */
+
+/**
+ * Fills in fields added after a record was written. Records are stored
+ * verbatim, so older rows simply read back with the new fields defaulted.
+ */
+export function normalizeTask(task: Task): Task {
+  return {
+    id: task.id,
+    title: task.title ?? 'Untitled task',
+    notes: task.notes ?? '',
+    projectId: task.projectId ?? null,
+    parentId: task.parentId ?? null,
+    place: task.place ?? null,
+    priority: task.priority ?? 4,
+    date: task.date ?? null,
+    time: task.time ?? null,
+    endDate: task.endDate ?? task.date ?? null,
+    endTime: task.endTime ?? null,
+    allDay: task.allDay ?? !task.time,
+    tags: task.tags ?? [],
+    lane: task.lane ?? '',
+    recurrence: task.recurrence ?? null,
+    completed: task.completed ?? false,
+    completedAt: task.completedAt ?? null,
+    reminded: task.reminded ?? false,
+    seriesId: task.seriesId ?? task.id,
+    order: task.order ?? 0,
+    createdAt: task.createdAt ?? Date.now(),
+    updatedAt: task.updatedAt ?? task.createdAt ?? Date.now(),
+  };
+}
+
+export function normalizeProject(project: Project): Project {
+  return {
+    id: project.id,
+    name: project.name ?? 'Project',
+    color: project.color ?? '#6E839A',
+    categoryId: project.categoryId ?? null,
+    tags: project.tags ?? [],
+    order: project.order ?? 0,
+    createdAt: project.createdAt ?? Date.now(),
+  };
+}
+
 export interface DatabaseSnapshot {
   tasks: Task[];
+  categories: Category[];
   projects: Project[];
   places: Place[];
   subscriptions: PushSubscriptionRecord[];
@@ -124,12 +182,13 @@ export interface DatabaseSnapshot {
 export async function loadSnapshot(): Promise<DatabaseSnapshot> {
   const db = await openDatabase();
   const tx = db.transaction(
-    [STORE.tasks, STORE.projects, STORE.places, STORE.subscriptions, STORE.settings],
+    [STORE.tasks, STORE.categories, STORE.projects, STORE.places, STORE.subscriptions, STORE.settings],
     'readonly',
   );
 
-  const [tasks, projects, places, subscriptions, settings] = await Promise.all([
+  const [tasks, categories, projects, places, subscriptions, settings] = await Promise.all([
     request(tx.objectStore(STORE.tasks).getAll() as IDBRequest<Task[]>),
+    request(tx.objectStore(STORE.categories).getAll() as IDBRequest<Category[]>),
     request(tx.objectStore(STORE.projects).getAll() as IDBRequest<Project[]>),
     request(tx.objectStore(STORE.places).getAll() as IDBRequest<Place[]>),
     request(tx.objectStore(STORE.subscriptions).getAll() as IDBRequest<PushSubscriptionRecord[]>),
@@ -137,11 +196,12 @@ export async function loadSnapshot(): Promise<DatabaseSnapshot> {
   ]);
 
   return {
-    tasks,
-    projects,
+    tasks: tasks.map(normalizeTask),
+    categories: categories.sort((a, b) => a.order - b.order),
+    projects: projects.map(normalizeProject).sort((a, b) => a.order - b.order),
     places,
     subscriptions,
-    settings: settings ?? { ...DEFAULT_SETTINGS },
+    settings: { ...DEFAULT_SETTINGS, ...(settings ?? {}) },
   };
 }
 
@@ -151,7 +211,21 @@ export const db = {
     put: (task: Task) => putValue(STORE.tasks, task),
     putMany: (tasks: Task[]) => putValues(STORE.tasks, tasks),
     remove: (id: string) => deleteValue(STORE.tasks, id),
+    removeMany: async (ids: string[]) => {
+      const database = await openDatabase();
+      const tx = database.transaction(STORE.tasks, 'readwrite');
+      const store = tx.objectStore(STORE.tasks);
+      for (const id of ids) store.delete(id);
+      await transactionDone(tx);
+    },
     clear: () => clearStore(STORE.tasks),
+  },
+  categories: {
+    all: () => readAll<Category>(STORE.categories),
+    put: (category: Category) => putValue(STORE.categories, category),
+    putMany: (categories: Category[]) => putValues(STORE.categories, categories),
+    remove: (id: string) => deleteValue(STORE.categories, id),
+    clear: () => clearStore(STORE.categories),
   },
   projects: {
     all: () => readAll<Project>(STORE.projects),
@@ -175,10 +249,10 @@ export const db = {
   },
   settings: {
     async get(): Promise<Settings> {
-      const db = await openDatabase();
-      const tx = db.transaction(STORE.settings, 'readonly');
+      const database = await openDatabase();
+      const tx = database.transaction(STORE.settings, 'readonly');
       const value = await request(tx.objectStore(STORE.settings).get(SETTINGS_KEY) as IDBRequest<Settings | undefined>);
-      return value ?? { ...DEFAULT_SETTINGS };
+      return { ...DEFAULT_SETTINGS, ...(value ?? {}) };
     },
     put: (settings: Settings) => putValue(STORE.settings, settings, SETTINGS_KEY),
     clear: () => clearStore(STORE.settings),
@@ -189,6 +263,7 @@ export const db = {
 export async function clearAll(): Promise<void> {
   await Promise.all([
     db.tasks.clear(),
+    db.categories.clear(),
     db.projects.clear(),
     db.places.clear(),
     db.subscriptions.clear(),

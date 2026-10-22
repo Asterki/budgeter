@@ -7,6 +7,7 @@
  */
 
 import type { Settings } from '../domain/types';
+import { ProgressHud } from './ProgressHud';
 
 interface TopBarProps {
   theme: Settings['theme'];
@@ -40,6 +41,7 @@ export function TopBar({ theme, onToggleTheme, onFocusSearch, onFocusQuickAdd, o
       </div>
 
       <div className="topbar__right">
+        <ProgressHud />
         <button
           type="button"
           className="icon-button"

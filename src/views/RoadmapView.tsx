@@ -49,12 +49,13 @@ export function RoadmapView({ onOpenTask }: RoadmapViewProps) {
   const timelineStart = columns[0];
   const totalColumns = columns.length;
 
+  // Only top-level work belongs on the timeline; subtasks live with their parent.
   const scheduled = useMemo(
-    () => tasks.filter((task) => !task.completed && task.date),
+    () => tasks.filter((task) => !task.completed && task.date && task.parentId === null),
     [tasks],
   );
   const unscheduled = useMemo(
-    () => tasks.filter((task) => !task.completed && !task.date),
+    () => tasks.filter((task) => !task.completed && !task.date && task.parentId === null),
     [tasks],
   );
 
