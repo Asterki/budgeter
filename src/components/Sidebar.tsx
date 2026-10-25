@@ -30,7 +30,7 @@ export function Sidebar({
   onProjectMenu,
   onOpenManual,
 }: SidebarProps) {
-  const { tasks, categories, projects, places, settings } = useTasker();
+  const { tasks, categories, projects, places } = useTasker();
   const today = todayISO();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -322,9 +322,7 @@ export function Sidebar({
         <button type="button" className="rail__item" onClick={onOpenManual}>
           <span className="rail__glyph">?</span> User manual
         </button>
-        <span className={`rail__status${settings.notificationsEnabled ? ' rail__status--on' : ''}`}>
-          {settings.notificationsEnabled ? 'Notifications on' : 'Notifications off'}
-        </span>
+        <span className="rail__status rail__status--on">Local-first · Offline ready</span>
       </div>
     </aside>
   );

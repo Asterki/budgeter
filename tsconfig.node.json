@@ -16,5 +16,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "api"]
+  "include": ["vite.config.ts"]
 }

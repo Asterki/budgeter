@@ -17,14 +17,21 @@ import {
   type ReactNode,
 } from 'react';
 
-import { clearAll, createId, db, loadSnapshot } from '../db/database';
+import {
+  clearAll,
+  createId,
+  db,
+  ensureUuids,
+  loadSnapshot,
+  normalizeSettings,
+  resetUuidMigration,
+} from '../db/database';
 import type {
   BackupFile,
   Category,
   Place,
   Priority,
   Project,
-  PushSubscriptionRecord,
   RecurrenceRule,
   Settings,
   Tag,
@@ -33,7 +40,12 @@ import type {
 import { DEFAULT_SETTINGS } from '../domain/types';
 import { isExhausted, nextOccurrence } from '../domain/recurrence';
 import { applyCompletion, revertCompletion, type CompletionOutcome, type CompletionUndo } from '../domain/progress';
-import { syncReminders } from '../notifications/push';
+import {
+  disconnectSync,
+  getSyncInfo,
+  loadSyncRuntime,
+  registerApplyHandler,
+} from '../sync/engine';
 
 export const PROJECT_COLORS = [
   '#263BAA', '#6E839A', '#4C8C8C', '#8C6E9E', '#B06A4F',
@@ -42,7 +54,7 @@ export const PROJECT_COLORS = [
 
 export const CATEGORY_COLORS = ['#263BAA', '#6E839A', '#4C8C8C', '#8C6E9E', '#B06A4F', '#5A7D9A'];
 
-const BACKUP_VERSION = 2;
+const BACKUP_VERSION = 3;
 
 export interface NewTaskInput {
   title: string;
@@ -70,7 +82,6 @@ interface TaskerContextValue {
   categories: Category[];
   projects: Project[];
   places: Place[];
-  subscriptions: PushSubscriptionRecord[];
   settings: Settings;
 
   createTask: (input: NewTaskInput) => Promise<Task>;
@@ -99,8 +110,6 @@ interface TaskerContextValue {
   deletePlace: (id: string) => void;
 
   updateSettings: (patch: Partial<Settings>) => void;
-  saveSubscription: (record: PushSubscriptionRecord) => void;
-  removeSubscription: (id: string) => void;
 
   buildBackup: () => BackupFile;
   restoreBackup: (backup: BackupFile) => Promise<void>;
@@ -153,7 +162,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [places, setPlaces] = useState<Place[]>([]);
-  const [subscriptions, setSubscriptions] = useState<PushSubscriptionRecord[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   // Refs mirror state so callbacks can read the latest values without being
@@ -171,29 +179,38 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    loadSnapshot().then((snapshot) => {
-      if (cancelled) return;
+
+    const applySnapshot = (snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => {
       setTasks(snapshot.tasks);
       setCategories(snapshot.categories);
       setProjects(snapshot.projects);
       setPlaces(snapshot.places);
-      setSubscriptions(snapshot.subscriptions);
       setSettings(snapshot.settings);
+    };
+
+    const boot = async () => {
+      // Legacy ids are migrated once, before the first read, so sync and local
+      // data always use the same stable UUIDs.
+      await ensureUuids();
+      const snapshot = await loadSnapshot();
+      if (cancelled) return;
+      applySnapshot(snapshot);
       setReady(true);
-    });
+
+      registerApplyHandler(() => {
+        void loadSnapshot().then((next) => {
+          if (!cancelled) applySnapshot(next);
+        });
+      });
+      await loadSyncRuntime();
+    };
+
+    void boot();
     return () => {
       cancelled = true;
+      registerApplyHandler(null);
     };
   }, []);
-
-  // Keep the serverless reminder mirror up to date (debounced).
-  useEffect(() => {
-    if (!ready) return;
-    const timer = window.setTimeout(() => {
-      void syncReminders(tasksRef.current, settingsRef.current);
-    }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [ready, tasks, settings]);
 
   /** Walks the subtask tree below `id`, breadth-first. */
   const descendantIds = useCallback((id: string): string[] => {
@@ -463,7 +480,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
         recurrence: input.recurrence ?? null,
         completed: false,
         completedAt: null,
-        reminded: false,
         seriesId: createId('ser'),
         order: nextOrder(tasksRef.current),
         createdAt: now,
@@ -505,7 +521,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       title: `${task.title} (copy)`,
       completed: false,
       completedAt: null,
-      reminded: false,
       seriesId: createId('ser'),
       order: nextOrder(tasksRef.current),
       createdAt: Date.now(),
@@ -525,7 +540,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       const now = Date.now();
 
       if (task.completed) {
-        commitTasks((current) => withPatch(current, id, { completed: false, completedAt: null, reminded: false }, []));
+        commitTasks((current) => withPatch(current, id, { completed: false, completedAt: null }, []));
         return null;
       }
 
@@ -558,7 +573,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       );
       updateSettings({ progress: outcome.progress });
 
-      const done = { completed: true, completedAt: now, reminded: true };
+      const done = { completed: true, completedAt: now };
 
       if (recurring && nextDate) {
         commitTasks((current) => {
@@ -572,7 +587,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
             endDate: task.endDate ? shiftRange(task.date!, task.endDate, nextDate) : nextDate,
             completed: false,
             completedAt: null,
-            reminded: false,
             order: nextOrder(all),
             createdAt: now,
             updatedAt: now,
@@ -586,7 +600,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
               parentId: item.parentId === id ? occurrence.id : item.parentId,
               completed: false,
               completedAt: null,
-              reminded: false,
               updatedAt: now,
             };
           });
@@ -609,7 +622,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     (undo: CompletionUndo) => {
       const ids = [undo.taskId, ...undo.alsoCompletedIds];
       commitTasks((current) =>
-        withMany(current, ids, { completed: false, completedAt: null, reminded: false }),
+        withMany(current, ids, { completed: false, completedAt: null }),
       );
       updateSettings({ progress: revertCompletion(settingsRef.current.progress, undo) });
     },
@@ -633,20 +646,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     });
   }, [commitTasks]);
 
-  /* ── Subscriptions, data portability ────────────────────────────────────── */
-
-  const saveSubscription = useCallback((record: PushSubscriptionRecord) => {
-    setSubscriptions((prev) => {
-      const next = [...prev.filter((sub) => sub.id !== record.id), record];
-      void db.subscriptions.put(record);
-      return next;
-    });
-  }, []);
-
-  const removeSubscription = useCallback((id: string) => {
-    setSubscriptions((prev) => prev.filter((sub) => sub.id !== id));
-    void db.subscriptions.remove(id);
-  }, []);
+  /* ── Data portability ───────────────────────────────────────────────────── */
 
   const buildBackup = useCallback(
     (): BackupFile => ({
@@ -658,7 +658,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       places: placesRef.current,
       tasks: tasksRef.current,
       settings: settingsRef.current,
-      subscriptions: [],
     }),
     [],
   );
@@ -667,13 +666,18 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     if (!backup || backup.app !== 'tasker' || !Array.isArray(backup.tasks)) {
       throw new Error('This file is not a Tasker backup.');
     }
+    if (await getSyncInfo()) {
+      throw new Error('Disconnect sync before restoring a backup.');
+    }
     await clearAll();
 
     const restoredCategories = backup.categories ?? [];
     const restoredProjects = backup.projects ?? [];
     const restoredPlaces = backup.places ?? [];
     const restoredTasks = backup.tasks ?? [];
-    const restoredSettings = { ...DEFAULT_SETTINGS, ...(backup.settings ?? {}) };
+    // v1/v2 backups may still carry reminder settings; normalizeSettings drops
+    // the retired keys so they never reach the v3 store.
+    const restoredSettings = normalizeSettings(backup.settings);
 
     await db.categories.putMany(restoredCategories);
     await db.projects.putMany(restoredProjects);
@@ -681,21 +685,25 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     await db.tasks.putMany(restoredTasks);
     await db.settings.put(restoredSettings);
 
-    setCategories(restoredCategories);
-    setProjects(restoredProjects);
-    setPlaces(restoredPlaces);
-    setTasks(restoredTasks);
-    setSubscriptions([]);
-    setSettings(restoredSettings);
+    // Imports may still carry legacy string ids; migrate them to UUIDs and read
+    // the rewritten rows back so state matches IndexedDB exactly.
+    await resetUuidMigration();
+    await ensureUuids();
+    const snapshot = await loadSnapshot();
+    setCategories(snapshot.categories);
+    setProjects(snapshot.projects);
+    setPlaces(snapshot.places);
+    setTasks(snapshot.tasks);
+    setSettings(snapshot.settings);
   }, []);
 
   const resetEverything = useCallback(async () => {
+    await disconnectSync();
     await clearAll();
     setCategories([]);
     setProjects([]);
     setPlaces([]);
     setTasks([]);
-    setSubscriptions([]);
     setSettings({ ...DEFAULT_SETTINGS });
   }, []);
 
@@ -706,7 +714,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       categories,
       projects,
       places,
-      subscriptions,
       settings,
       createTask,
       updateTask,
@@ -727,8 +734,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       ensurePlace,
       deletePlace,
       updateSettings,
-      saveSubscription,
-      removeSubscription,
       buildBackup,
       restoreBackup,
       resetEverything,
@@ -739,7 +744,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       categories,
       projects,
       places,
-      subscriptions,
       settings,
       createTask,
       updateTask,
@@ -760,8 +764,6 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
       ensurePlace,
       deletePlace,
       updateSettings,
-      saveSubscription,
-      removeSubscription,
       buildBackup,
       restoreBackup,
       resetEverything,

@@ -98,20 +98,10 @@ export interface Task {
 
   completed: boolean;
   completedAt: number | null;
-  /** Set once a notification has been delivered for this occurrence. */
-  reminded: boolean;
   /** Stable id shared by every occurrence generated from one recurring task. */
   seriesId: string;
 
   order: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface PushSubscriptionRecord {
-  id: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
   createdAt: number;
   updatedAt: number;
 }
@@ -162,11 +152,7 @@ export const EMPTY_PROGRESS: Progress = {
 export interface Settings {
   /** Single key/value bag persisted in IndexedDB. */
   theme: 'nordic-light' | 'nordic-dark';
-  notificationsEnabled: boolean;
-  /** Minutes before the task time to fire a reminder. 0 = exactly on time. */
-  reminderLeadMinutes: number;
   defaultProjectId: string | null;
-  lastSyncAt: number | null;
   /** Gamification state driven by task completions. */
   progress: Progress;
   /** Plays a short chime on completion. Off by default. */
@@ -177,10 +163,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'nordic-light',
-  notificationsEnabled: false,
-  reminderLeadMinutes: 0,
   defaultProjectId: null,
-  lastSyncAt: null,
   progress: {
     xp: 0,
     totalCompleted: 0,
@@ -210,5 +193,4 @@ export interface BackupFile {
   places: Place[];
   tasks: Task[];
   settings: Settings;
-  subscriptions: PushSubscriptionRecord[];
 }

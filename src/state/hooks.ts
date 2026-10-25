@@ -1,6 +1,6 @@
 /** Small UI hooks shared across the shell. */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /** Returns `value` only after it has stopped changing for `delay` ms. */
 export function useDebouncedValue<T>(value: T, delay = 200): T {
@@ -27,16 +27,4 @@ export function useMediaQuery(query: string): boolean {
   }, [query]);
 
   return matches;
-}
-
-/** Runs `callback` on an interval without ever capturing a stale closure. */
-export function useInterval(callback: () => void, delay: number | null): void {
-  const ref = useRef(callback);
-  ref.current = callback;
-
-  useEffect(() => {
-    if (delay === null) return;
-    const id = window.setInterval(() => ref.current(), delay);
-    return () => window.clearInterval(id);
-  }, [delay]);
 }

@@ -19,8 +19,7 @@ import { SettingsView } from './views/SettingsView';
 import { UserManual } from './docs/UserManual';
 import { INITIAL_SELECTION, type NavSelection, type ViewKey } from './state/navigation';
 import { CATEGORY_COLORS, PROJECT_COLORS, useTasker } from './state/store';
-import { useInterval, useMediaQuery } from './state/hooks';
-import { buildReminders } from './notifications/push';
+import { useMediaQuery } from './state/hooks';
 import type { Category, Project, Task } from './domain/types';
 
 type FocusTarget = 'quickadd' | 'search' | null;
@@ -49,7 +48,6 @@ export function App() {
     projects,
     settings,
     updateSettings,
-    updateTask,
     createCategory,
     updateCategory,
     deleteCategory,
@@ -159,33 +157,6 @@ export function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [requestFocus]);
-
-  // ── Foreground reminder watcher ───────────────────────────────────────────
-  // Vercel's cron is disabled, so notifications are delivered here while the
-  // app is open (and by any external trigger when it is not).
-  useInterval(
-    () => {
-      if (!settings.notificationsEnabled || !('serviceWorker' in navigator)) return;
-      const now = Date.now();
-      const due = buildReminders(tasks, settings).filter(
-        (reminder) => reminder.timestamp <= now && now - reminder.timestamp < 120_000,
-      );
-      if (due.length === 0) return;
-
-      void navigator.serviceWorker.ready.then((registration) => {
-        for (const reminder of due) {
-          void registration.showNotification(reminder.title, {
-            body: reminder.body,
-            tag: reminder.taskId,
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
-          });
-          updateTask(reminder.taskId, { reminded: true });
-        }
-      });
-    },
-    ready && settings.notificationsEnabled ? 30_000 : null,
-  );
 
   /* ── Category + project management (prompt driven, dependency free) ─────── */
 

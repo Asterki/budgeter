@@ -1,9 +1,9 @@
 # Tasker — User Manual
 
 Tasker is a local-first todo and planning app. Everything you create lives on
-your device in IndexedDB; there is no account, no login and no server-side copy
-of your work. The only network calls are the optional reminder sync and the
-optional update check.
+your device in IndexedDB; there is no account and no login. The app works with
+no network at all. If you turn on optional sync, Tasker talks only to the relay
+you configure, and only with encrypted payloads.
 
 ---
 
@@ -50,7 +50,7 @@ Category        Work, Personal, …            ← groups projects
 │ PLACES        │                                                          │
 │  @desk @home  │                                                          │
 ├───────────────┴──────────────────────────────────────────────────────────┤
-│ ⚙ Settings   ? User manual        ● Notifications off                    │
+│ ⚙ Settings   ? User manual        ● Local-first · Offline ready          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -272,39 +272,7 @@ one, so your history stays intact.
 
 ---
 
-## 10. Notifications
-
-Reminders are delivered **in the app** whenever Tasker is open, and by **web
-push** when the browser grants push access — even if the tab is closed.
-
-1. Open **Settings → Notifications** and click **Enable notifications**.
-2. Accept the browser prompt.
-
-That is all that is needed for in-app reminders. Background push additionally
-requires a VAPID key pair in the deployment environment
-(`VITE_VAPID_PUBLIC_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
-`VAPID_SUBJECT`); without it the Settings panel says so and reminders simply
-arrive while the app is open.
-
-**Vercel's cron job is disabled** in this build, so no schedule runs on the
-server by default. If you want background delivery, point any free scheduler
-(cron-job.org, a Cloudflare Worker Cron Trigger, a GitHub Actions schedule) at:
-
-```
-https://your-app.vercel.app/api/check-reminders?secret=YOUR_CRON_SECRET
-```
-
-…every minute, after setting `CRON_SECRET`. Tasker syncs your upcoming reminders
-to that endpoint as soon as a push subscription exists.
-
-### Installing the app (PWA)
-
-Use the browser's **Install** / **Add to Home Screen** action. Tasker then runs in
-its own window and works fully offline.
-
----
-
-## 11. Backup, restore and reset
+## 10. Backup, restore and reset
 
 Everything lives in **Settings → Data**.
 
@@ -318,12 +286,52 @@ Keep the exported file somewhere safe — it is the only copy of your data.
 
 ---
 
+## 11. Sync between devices
+
+Sync is optional and off by default. Everything works without it. To turn it on,
+open **Settings → Sync**.
+
+1. Enter the **relay URL** (for example `https://tasker-api.asterki.xyz`).
+2. Enter a long **passphrase**. It is stretched in your browser and never sent to
+   the relay.
+3. Choose **Connect**. If that passphrase has no data yet, Tasker asks you to
+   confirm **Create new space**.
+4. On the second device, use the same relay URL and passphrase and choose
+   **Connect**. Both devices must show the same 8-character **Space**
+   fingerprint.
+
+There is no recovery: if you lose the passphrase, the sync space is gone.
+
+Once connected:
+
+- Every change is queued locally first. Tasker pushes the queue whenever it can
+  reach the relay and pulls new changes every 20 seconds while open, and right
+  away when the tab regains focus or the network returns.
+- Changes made offline are sent when the connection comes back.
+- Conflicts are settled per record by the most recent change. Tags on tasks and
+  projects are combined rather than discarded.
+- **Sync now** forces an immediate cycle; the card shows queued changes and the
+  last successful sync.
+- **Disconnect** stops syncing and clears the sync metadata. Your tasks stay.
+  Reconnecting merges this device with the remote space; where the same record
+  changed on both sides, the newest change wins.
+- XP, streaks and achievements are personal to each device and are never synced.
+
+Importing a JSON backup is blocked while sync is connected. Disconnect first.
+
+---
+
 ## 12. Offline behaviour
 
 - The app shell is cached by `sw.js`, so Tasker opens with no network.
 - All reads and writes go to IndexedDB and work offline.
-- Reminder sync is best-effort: when you come back online, the next sync pushes
-  the current reminder list.
+- If sync is connected, changes queue on the device and upload when the relay is
+  reachable again. Nothing is sent anywhere until you connect a sync space.
+
+### Installing the app (PWA)
+
+Use the browser's **Install** / **Add to Home Screen** action. Tasker then runs in
+its own window and works fully offline.
 
 ---
 
@@ -331,10 +339,11 @@ Keep the exported file somewhere safe — it is the only copy of your data.
 
 | Symptom | Fix |
 | --- | --- |
-| No notifications | Check the browser permission, then re-enable in Settings. |
-| Reminders only arrive while the app is open | Expected unless a VAPID key is configured and something calls `/api/check-reminders`. |
 | A `#project` or `^category` stayed in the task title | Put a space before the token — `release #Tasker`, not `release#Tasker`. |
 | The combo never builds | Completions must be within 8 seconds of each other. |
 | No vibration | Most desktops have no vibration motor; check the toggle in the HUD. |
 | App shows stale content | Hard-reload once; the service worker updates on the next visit. |
+| Sync says “Could not reach the sync server” | Check the relay URL and TLS certificate; the device must be online. |
+| Sync shows a different Space fingerprint | The passphrases differ. Use the same passphrase on both devices. |
+| Sync card asks to create a space | That passphrase has no data on the relay yet; confirm only if this is the first device. |
 | Lost data | Import your most recent JSON export. |

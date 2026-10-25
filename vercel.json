@@ -2,14 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "outputDirectory": "dist",
-  "functions": {
-    "api/check-reminders.ts": {
-      "maxDuration": 30
-    }
-  },
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ],

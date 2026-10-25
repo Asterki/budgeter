@@ -2860,3 +2860,17 @@ textarea.input {
     display: none;
   }
 }
+
+/* ── Sync settings ────────────────────────────────────────────────────────── */
+
+.sync-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  max-width: 520px;
+}
+
+.sync-fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+}

@@ -1,19 +1,21 @@
 /**
- * Settings — appearance, progress, notifications, workspace and data.
+ * Settings — appearance, progress, workspace and data.
  */
 
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { BackupFile, Category, Settings } from '../domain/types';
 import { formatDateShort, todayISO } from '../domain/date';
 import { completionsByDay, currentStreak, levelForXp, ACHIEVEMENTS } from '../domain/progress';
 import { CATEGORY_COLORS, useTasker } from '../state/store';
 import {
-  currentSubscription,
-  disableNotifications,
-  enableNotifications,
-  notificationsSupported,
-  vapidPublicKey,
-} from '../notifications/push';
+  connectSync,
+  disconnectSync,
+  getSyncInfo,
+  getSyncStatus,
+  subscribeSync,
+  syncNow,
+} from '../sync/engine';
+import { NewSyncSpaceError, type SyncInfo, type SyncStatus } from '../sync/types';
 
 interface SettingsViewProps {
   onOpenManual: () => void;
@@ -26,15 +28,12 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
     settings,
     categories,
     projects,
-    subscriptions,
     tasks,
     places,
     updateSettings,
     createCategory,
     updateCategory,
     deleteCategory,
-    saveSubscription,
-    removeSubscription,
     buildBackup,
     restoreBackup,
     resetEverything,
@@ -43,6 +42,62 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(getSyncStatus);
+  const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
+  const [serverUrl, setServerUrl] = useState(
+    import.meta.env.VITE_SYNC_URL ?? 'https://tasker-api.asterki.xyz',
+  );
+  const [passphrase, setPassphrase] = useState('');
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [confirmCreate, setConfirmCreate] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = subscribeSync(setSyncStatus);
+    void getSyncInfo().then(setSyncInfo);
+    return unsubscribe;
+  }, []);
+
+  const handleConnect = async (allowCreate: boolean) => {
+    setSyncBusy(true);
+    try {
+      const result = await connectSync(serverUrl, passphrase, allowCreate);
+      setSyncInfo(await getSyncInfo());
+      setPassphrase('');
+      setConfirmCreate(false);
+      setStatus({
+        tone: 'ok',
+        text: result.created ? 'New sync space created and linked.' : 'Connected. Your tasks are syncing.',
+      });
+    } catch (error) {
+      if (error instanceof NewSyncSpaceError) {
+        setConfirmCreate(true);
+        setStatus({
+          tone: 'warn',
+          text: 'This passphrase has no data on the relay yet. Create a space to start syncing with it.',
+        });
+      } else {
+        setStatus({
+          tone: 'error',
+          text: error instanceof Error ? error.message : 'Could not connect.',
+        });
+      }
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setSyncBusy(true);
+    try {
+      await disconnectSync();
+      setSyncInfo(null);
+      setConfirmCreate(false);
+      setStatus({ tone: 'ok', text: 'Sync disconnected. Local data is untouched.' });
+    } finally {
+      setSyncBusy(false);
+    }
+  };
 
   const patch = (partial: Partial<Settings>) => updateSettings(partial);
 
@@ -53,28 +108,6 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
   const history = useMemo(() => completionsByDay(tasks, 14), [tasks]);
   const peak = Math.max(1, ...history.map((day) => day.count));
   const plannedToday = tasks.filter((task) => !task.completed && task.date === todayISO() && task.parentId === null).length;
-
-  async function handleEnable() {
-    setBusy(true);
-    setStatus(null);
-    const result = await enableNotifications();
-    if (result.ok) {
-      const record = await currentSubscription();
-      if (record) saveSubscription(record);
-      patch({ notificationsEnabled: true });
-    }
-    setStatus({ tone: result.ok ? 'ok' : 'warn', text: result.message });
-    setBusy(false);
-  }
-
-  async function handleDisable() {
-    setBusy(true);
-    await disableNotifications();
-    subscriptions.forEach((sub) => removeSubscription(sub.id));
-    patch({ notificationsEnabled: false });
-    setStatus({ tone: 'ok', text: 'Notifications disabled on this device.' });
-    setBusy(false);
-  }
 
   function handleExport() {
     const backup = buildBackup();
@@ -132,14 +165,12 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
     }
   }
 
-  const pushConfigured = Boolean(vapidPublicKey());
-
   return (
     <section className="view">
       <header className="view__header">
         <div>
           <h1 className="view__title">Settings</h1>
-          <p className="view__subtitle">Appearance, progress, notifications, workspace and data</p>
+          <p className="view__subtitle">Appearance, progress, workspace and data</p>
         </div>
         <button type="button" className="button" onClick={onOpenManual}>
           Open user manual
@@ -252,60 +283,6 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
       </div>
 
       <div className="card">
-        <h2 className="card__title">Notifications</h2>
-        <p className="card__hint">
-          Reminders are delivered while Tasker is open. If the browser grants push access, they also
-          arrive while it is closed.
-        </p>
-        <div className="card__row">
-          <label className="field">
-            <span className="field__label">Remind me</span>
-            <select
-              className="input"
-              value={settings.reminderLeadMinutes}
-              onChange={(event) => patch({ reminderLeadMinutes: Number(event.target.value) })}
-            >
-              <option value={0}>At the scheduled time</option>
-              <option value={5}>5 minutes before</option>
-              <option value={10}>10 minutes before</option>
-              <option value={30}>30 minutes before</option>
-              <option value={60}>1 hour before</option>
-            </select>
-          </label>
-          <div className="field">
-            <span className="field__label">Status</span>
-            <div className="status-line">
-              <span className={`pill ${settings.notificationsEnabled ? 'pill--on' : 'pill--off'}`}>
-                {settings.notificationsEnabled ? 'Enabled' : 'Off'}
-              </span>
-              <span className="muted">
-                {subscriptions.length > 0 ? 'background push ready' : 'in-app only'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {!notificationsSupported() && (
-          <div className="notice notice--warn">This browser does not support notifications.</div>
-        )}
-        {notificationsSupported() && !pushConfigured && (
-          <div className="notice notice--warn">
-            No VAPID key configured, so reminders only fire while Tasker is open. Add{' '}
-            <code>VITE_VAPID_PUBLIC_KEY</code> and redeploy for background push.
-          </div>
-        )}
-
-        <div className="card__actions">
-          <button type="button" className="button button--primary" onClick={() => void handleEnable()} disabled={busy}>
-            Enable notifications
-          </button>
-          <button type="button" className="button" onClick={() => void handleDisable()} disabled={busy}>
-            Disable
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
         <h2 className="card__title">Categories &amp; projects</h2>
         <p className="card__hint">
           Categories group projects; projects group tasks. Every task can nest subtasks to any depth.
@@ -377,6 +354,110 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
           hidden
           onChange={(event) => void handleImport(event)}
         />
+      </div>
+
+      <div className="card">
+        <h2 className="card__title">Sync</h2>
+        <p className="card__hint">
+          Optional end-to-end encrypted sync through your own relay. Your passphrase never leaves
+          this device; only ciphertext is stored on the server. Lose the passphrase and the sync
+          space cannot be recovered.
+        </p>
+
+        {syncInfo ? (
+          <>
+            <dl className="about">
+              <div>
+                <dt>Relay</dt>
+                <dd>{syncInfo.serverUrl}</dd>
+              </div>
+              <div>
+                <dt>Space</dt>
+                <dd className="sync-fingerprint">{syncInfo.fingerprint}</dd>
+              </div>
+              <div>
+                <dt>Last sync</dt>
+                <dd>{syncInfo.lastSyncAt ? new Date(syncInfo.lastSyncAt).toLocaleString() : 'Not yet'}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>
+                  {syncStatus.state === 'syncing'
+                    ? 'Syncing…'
+                    : syncStatus.state === 'error'
+                      ? 'Needs attention'
+                      : 'Up to date'}
+                  {syncStatus.pending > 0 ? ` · ${syncStatus.pending} queued` : ''}
+                </dd>
+              </div>
+            </dl>
+            {syncStatus.error && <p className="card__hint">{syncStatus.error}</p>}
+            <div className="card__actions">
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => void syncNow()}
+                disabled={syncStatus.state === 'syncing'}
+              >
+                Sync now
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={() => void handleDisconnect()}
+                disabled={syncBusy}
+              >
+                Disconnect
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="sync-form">
+            <label className="field">
+              <span className="field__label">Relay URL</span>
+              <input
+                className="input"
+                type="url"
+                value={serverUrl}
+                onChange={(event) => setServerUrl(event.target.value)}
+                placeholder="https://tasker-api.example.com"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <label className="field">
+              <span className="field__label">Passphrase</span>
+              <input
+                className="input"
+                type="password"
+                value={passphrase}
+                onChange={(event) => setPassphrase(event.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete="new-password"
+              />
+            </label>
+            <div className="card__actions">
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => void handleConnect(false)}
+                disabled={syncBusy || passphrase.trim().length < 8}
+              >
+                Connect
+              </button>
+              {confirmCreate && (
+                <button
+                  type="button"
+                  className="button button--danger"
+                  onClick={() => void handleConnect(true)}
+                  disabled={syncBusy}
+                >
+                  Create new space
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card">

@@ -1,0 +1,73 @@
+/** Shared shapes for the optional sync layer. */
+
+import type { EntityKind } from '../db/database';
+
+export type { EntityKind };
+
+export interface SyncConfig {
+  key: 'app';
+  serverUrl: string;
+  clientId: string;
+  authKey: string;
+  encKey: CryptoKey;
+  fingerprint: string;
+  cursor: number;
+  enabled: boolean;
+  lastSyncAt: number;
+  lastHlc: string;
+}
+
+export type SyncState = 'off' | 'idle' | 'syncing' | 'error';
+
+export interface SyncStatus {
+  configured: boolean;
+  state: SyncState;
+  pending: number;
+  lastSyncAt: number;
+  error: string | null;
+}
+
+export interface SyncInfo {
+  serverUrl: string;
+  fingerprint: string;
+  lastSyncAt: number;
+}
+
+export interface RemoteChange {
+  seq: number;
+  changeId: string;
+  clientId: string;
+  entityType: EntityKind;
+  entityId: string;
+  hlc: string;
+  deleted: boolean;
+  payload: string;
+}
+
+export interface RemoteEntity {
+  entityType: EntityKind;
+  entityId: string;
+  hlc: string;
+  deleted: boolean;
+  payload: string;
+}
+
+export interface ChangesPage {
+  changes: RemoteChange[];
+  cursor: number;
+  hasMore: boolean;
+}
+
+export interface SnapshotPage {
+  entities: RemoteEntity[];
+  next: { type: string; id: string } | null;
+  head: number;
+}
+
+/** Thrown before a connection when the passphrase has no remote data yet. */
+export class NewSyncSpaceError extends Error {
+  constructor() {
+    super('This passphrase has no sync data yet.');
+    this.name = 'NewSyncSpaceError';
+  }
+}

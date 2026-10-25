@@ -1,12 +1,7 @@
 /*
  * Tasker service worker.
  *
- * Two jobs:
- *   1. Offline-first caching of the app shell, so Tasker opens and works with
- *      no network at all.
- *   2. Background push delivery — the `push` handler renders a notification
- *      even when the app is completely closed.
- *
+ * Owns the offline-first cache so the app shell boots with no network at all.
  * It is intentionally dependency-free and versioned by CACHE_VERSION.
  */
 
@@ -83,12 +78,6 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Never cache the reminder API — it must always hit the network.
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(request).catch(() => new Response('{}', { headers: { 'content-type': 'application/json' } })));
-    return;
-  }
-
   // Navigations: network-first so updates land, falling back to the cached shell.
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -98,7 +87,12 @@ self.addEventListener('fetch', (event) => {
           caches.open(SHELL_CACHE).then((cache) => cache.put('/index.html', copy)).catch(() => {});
           return response;
         })
-        .catch(async () => (await caches.match('/index.html', { ignoreVary: true })) ?? (await caches.match('/', { ignoreVary: true })) ?? Response.error()),
+        .catch(
+          async () =>
+            (await caches.match('/index.html', { ignoreVary: true })) ??
+            (await caches.match('/', { ignoreVary: true })) ??
+            Response.error(),
+        ),
     );
     return;
   }
@@ -117,62 +111,5 @@ self.addEventListener('fetch', (event) => {
         .catch(() => cached ?? Response.error());
       return cached ?? network;
     }),
-  );
-});
-
-/* ── Web Push ─────────────────────────────────────────────────────────────── */
-
-self.addEventListener('push', (event) => {
-  let payload = { title: 'Tasker', body: 'You have a task coming up.', tag: undefined, url: '/' };
-
-  try {
-    if (event.data) payload = { ...payload, ...event.data.json() };
-  } catch {
-    if (event.data) payload.body = event.data.text();
-  }
-
-  event.waitUntil(
-    self.registration.showNotification(payload.title, {
-      body: payload.body,
-      tag: payload.tag,
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-      data: { url: payload.url || '/' },
-      requireInteraction: false,
-    }),
-  );
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const target = event.notification.data?.url || '/';
-
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ('focus' in client) {
-          client.navigate(target).catch(() => {});
-          return client.focus();
-        }
-      }
-      return self.clients.openWindow(target);
-    }),
-  );
-});
-
-self.addEventListener('pushsubscriptionchange', (event) => {
-  // Re-subscribe transparently if the browser rotates the subscription.
-  event.waitUntil(
-    self.registration.pushManager
-      .getSubscription()
-      .then((subscription) => {
-        if (!subscription) return null;
-        return fetch('/api/check-reminders', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ subscription: subscription.toJSON() }),
-        });
-      })
-      .catch(() => null),
   );
 });
