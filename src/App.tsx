@@ -6,6 +6,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FiCalendar, FiList, FiMap, FiPlus, FiSettings, FiX } from 'react-icons/fi';
+import type { IconType } from 'react-icons';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { BottomSheet } from './components/BottomSheet';
@@ -31,11 +33,11 @@ const TAB_LABELS: Record<ViewKey, string> = {
   settings: 'More',
 };
 
-const TAB_ICONS: Record<ViewKey, string> = {
-  tasks: '☰',
-  calendar: '▦',
-  roadmap: '⌁',
-  settings: '⚙',
+const TAB_ICONS: Record<ViewKey, IconType> = {
+  tasks: FiList,
+  calendar: FiCalendar,
+  roadmap: FiMap,
+  settings: FiSettings,
 };
 
 const LANDING: NavSelection = INITIAL_SELECTION;
@@ -267,7 +269,6 @@ export function App() {
   if (!ready) {
     return (
       <div className="boot">
-        <span className="brand__mark brand__mark--lg">T</span>
         <p>Loading your tasks…</p>
       </div>
     );
@@ -323,7 +324,7 @@ export function App() {
               <div className="panel__header">
                 <span className="panel__title">Task details</span>
                 <button type="button" className="icon-button" onClick={() => setOpenTaskId(null)} aria-label="Close panel">
-                  ✕
+                  <FiX aria-hidden="true" />
                 </button>
               </div>
               <div className="panel__body">{detailBody}</div>
@@ -334,23 +335,26 @@ export function App() {
         {isMobile && (
           <>
             <button type="button" className="fab" onClick={() => setMobileCreateOpen(true)} aria-label="Add task">
-              ＋
+              <FiPlus aria-hidden="true" />
             </button>
 
             <nav className="tabbar" aria-label="Views">
-              {(['tasks', 'calendar', 'roadmap', 'settings'] as ViewKey[]).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`tabbar__item${selection.view === key ? ' tabbar__item--active' : ''}`}
-                  onClick={() => setSelection((prev) => ({ ...prev, view: key }))}
-                >
-                  <span className="tabbar__icon" aria-hidden="true">
-                    {TAB_ICONS[key]}
-                  </span>
-                  {TAB_LABELS[key]}
-                </button>
-              ))}
+              {(['tasks', 'calendar', 'roadmap', 'settings'] as ViewKey[]).map((key) => {
+                const Icon = TAB_ICONS[key];
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`tabbar__item${selection.view === key ? ' tabbar__item--active' : ''}`}
+                    onClick={() => setSelection((prev) => ({ ...prev, view: key }))}
+                  >
+                    <span className="tabbar__icon" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    {TAB_LABELS[key]}
+                  </button>
+                );
+              })}
             </nav>
           </>
         )}
@@ -394,7 +398,7 @@ export function App() {
                 <header className="modal__header">
                   <span className="modal__title">User manual</span>
                   <button type="button" className="icon-button" onClick={() => setManualOpen(false)} aria-label="Close manual">
-                    ✕
+                    <FiX aria-hidden="true" />
                   </button>
                 </header>
                 <div className="modal__body">

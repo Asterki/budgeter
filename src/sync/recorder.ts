@@ -47,6 +47,7 @@ export function entityPayload(kind: EntityKind, value: unknown): unknown {
       defaultProjectId: settings.defaultProjectId,
       soundEnabled: settings.soundEnabled,
       hapticsEnabled: settings.hapticsEnabled,
+      progress: settings.progress,
     };
   }
   if (kind === 'task') return normalizeTask(value as Task);

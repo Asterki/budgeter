@@ -4,6 +4,7 @@
  */
 
 import type { Ref } from 'react';
+import { FiSearch, FiX } from 'react-icons/fi';
 import type { Priority } from '../domain/types';
 
 export type SortKey = 'date' | 'priority' | 'created' | 'alpha' | 'manual';
@@ -39,7 +40,7 @@ export function FilterBar({ filters, onChange, resultCount, inputRef }: FilterBa
     <div className="filter-bar">
       <div className="filter-bar__search">
         <span className="filter-bar__icon" aria-hidden="true">
-          ⌕
+          <FiSearch />
         </span>
         <input
           ref={inputRef}
@@ -52,7 +53,7 @@ export function FilterBar({ filters, onChange, resultCount, inputRef }: FilterBa
         />
         {filters.search && (
           <button type="button" className="icon-button" onClick={() => patch({ search: '' })} aria-label="Clear filter">
-            ✕
+            <FiX aria-hidden="true" />
           </button>
         )}
       </div>

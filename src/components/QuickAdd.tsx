@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type Ref } from 'react';
+import { FiCalendar, FiClock, FiMapPin, FiPlus, FiRepeat } from 'react-icons/fi';
 import { useTasker, type NewTaskInput } from '../state/store';
 import { parseTaskInput } from '../domain/parser';
 import { applySuggestion, buildSuggestions, findActiveToken } from '../domain/suggestions';
@@ -182,7 +183,7 @@ export function QuickAdd({
     <div className={`quick-add${compact ? ' quick-add--compact' : ''}`}>
       <div className="quick-add__row">
         <span className="quick-add__plus" aria-hidden="true">
-          ＋
+          <FiPlus />
         </span>
         <input
           ref={attachRef}
@@ -260,16 +261,28 @@ export function QuickAdd({
               {project.name}
             </span>
           )}
-          {parsed.place && <span className="chip">📍 @{parsed.place}</span>}
-          {parsed.date && <span className="chip">🗓 {formatTaskRange(parsed.date, parsed.endDate)}</span>}
+          {parsed.place && (
+            <span className="chip">
+              <FiMapPin aria-hidden="true" /> @{parsed.place}
+            </span>
+          )}
+          {parsed.date && (
+            <span className="chip">
+              <FiCalendar aria-hidden="true" /> {formatTaskRange(parsed.date, parsed.endDate)}
+            </span>
+          )}
           {parsed.time && (
             <span className="chip">
-              🕒 {formatTime(parsed.time)}
+              <FiClock aria-hidden="true" /> {formatTime(parsed.time)}
               {parsed.endTime ? ` – ${formatTime(parsed.endTime)}` : ''}
             </span>
           )}
           {parsed.priority !== 4 && <span className={`chip chip--p${parsed.priority}`}>!{parsed.priority}</span>}
-          {parsed.recurrence && <span className="chip">🔁 {describeRecurrence(parsed.recurrence)}</span>}
+          {parsed.recurrence && (
+            <span className="chip">
+              <FiRepeat aria-hidden="true" /> {describeRecurrence(parsed.recurrence)}
+            </span>
+          )}
           {parsed.tags.map((tag) => (
             <span className="chip" key={tag}>
               +{tag}

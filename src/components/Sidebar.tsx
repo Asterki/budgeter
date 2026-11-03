@@ -6,6 +6,20 @@
  */
 
 import { useMemo, useState } from 'react';
+import {
+  FiBookOpen,
+  FiCalendar,
+  FiCheckCircle,
+  FiChevronDown,
+  FiChevronRight,
+  FiInbox,
+  FiList,
+  FiMapPin,
+  FiMoreHorizontal,
+  FiPlus,
+  FiSettings,
+  FiStar,
+} from 'react-icons/fi';
 import type { Category, Project } from '../domain/types';
 import type { NavSelection } from '../state/navigation';
 import { todayISO } from '../domain/date';
@@ -119,7 +133,7 @@ export function Sidebar({
           onClick={() => onProjectMenu(project)}
           aria-label={`Manage project ${project.name}`}
         >
-          ⋯
+          <FiMoreHorizontal aria-hidden="true" />
         </button>
       </div>
     );
@@ -134,7 +148,7 @@ export function Sidebar({
           className={`rail__item${isScope('scheduled') ? ' rail__item--active' : ''}`}
           onClick={() => select('scheduled')}
         >
-          <span className="rail__glyph">▦</span> Scheduled
+          <span className="rail__glyph"><FiCalendar aria-hidden="true" /></span> Scheduled
           <span className="rail__count">{stats.scheduled}</span>
         </button>
         <button
@@ -142,7 +156,7 @@ export function Sidebar({
           className={`rail__item${isScope('today') ? ' rail__item--active' : ''}`}
           onClick={() => select('today')}
         >
-          <span className="rail__glyph">★</span> Today
+          <span className="rail__glyph"><FiStar aria-hidden="true" /></span> Today
           <span className="rail__count">{stats.today}</span>
         </button>
         <button
@@ -150,7 +164,7 @@ export function Sidebar({
           className={`rail__item${isScope('inbox') ? ' rail__item--active' : ''}`}
           onClick={() => select('inbox')}
         >
-          <span className="rail__glyph">▤</span> Inbox
+          <span className="rail__glyph"><FiInbox aria-hidden="true" /></span> Inbox
           <span className="rail__count">{stats.inbox}</span>
         </button>
         <button
@@ -158,7 +172,7 @@ export function Sidebar({
           className={`rail__item${isScope('all') ? ' rail__item--active' : ''}`}
           onClick={() => select('all')}
         >
-          <span className="rail__glyph">≡</span> All tasks
+          <span className="rail__glyph"><FiList aria-hidden="true" /></span> All tasks
           <span className="rail__count">{stats.all}</span>
         </button>
         <button
@@ -166,7 +180,7 @@ export function Sidebar({
           className={`rail__item${isScope('completed') ? ' rail__item--active' : ''}`}
           onClick={() => select('completed')}
         >
-          <span className="rail__glyph">✓</span> Completed
+          <span className="rail__glyph"><FiCheckCircle aria-hidden="true" /></span> Completed
           <span className="rail__count">{stats.completed}</span>
         </button>
       </nav>
@@ -181,7 +195,7 @@ export function Sidebar({
             aria-label="New category"
             title="New category"
           >
-            ＋
+            <FiPlus aria-hidden="true" />
           </button>
         </span>
 
@@ -210,7 +224,7 @@ export function Sidebar({
                       toggleCategory(category.id);
                     }}
                   >
-                    {isCollapsed ? '▸' : '▾'}
+                    {isCollapsed ? <FiChevronRight aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
                   </span>
                   <span className="dot" style={{ background: category.color }} />
                   <span className="rail__label">{category.name}</span>
@@ -222,7 +236,7 @@ export function Sidebar({
                   onClick={() => onCategoryMenu(category)}
                   aria-label={`Manage category ${category.name}`}
                 >
-                  ⋯
+                  <FiMoreHorizontal aria-hidden="true" />
                 </button>
               </div>
 
@@ -234,7 +248,7 @@ export function Sidebar({
                     className="rail__item rail__item--nested rail__item--ghost"
                     onClick={() => onCreateProject(category.id)}
                   >
-                    <span className="rail__glyph">＋</span>
+                    <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
                     <span className="rail__label">New project</span>
                   </button>
                 </>
@@ -261,7 +275,7 @@ export function Sidebar({
                     toggleCategory('__none__');
                   }}
                 >
-                  {collapsed.has('__none__') ? '▸' : '▾'}
+                  {collapsed.has('__none__') ? <FiChevronRight aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
                 </span>
                 <span className="rail__label">Uncategorised</span>
                 <span className="rail__count">{uncategorised.length}</span>
@@ -275,7 +289,7 @@ export function Sidebar({
                   className="rail__item rail__item--nested rail__item--ghost"
                   onClick={() => onCreateProject(null)}
                 >
-                  <span className="rail__glyph">＋</span>
+                  <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
                   <span className="rail__label">New project</span>
                 </button>
               </>
@@ -285,7 +299,7 @@ export function Sidebar({
 
         {(categories.length > 0 || uncategorised.length === 0) && (
           <button type="button" className="rail__item rail__item--ghost" onClick={() => onCreateProject(null)}>
-            <span className="rail__glyph">＋</span>
+            <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
             <span className="rail__label">New project</span>
           </button>
         )}
@@ -303,7 +317,7 @@ export function Sidebar({
               }`}
               onClick={() => select('place', { place: place.name })}
             >
-              <span className="rail__glyph">@</span>
+              <span className="rail__glyph"><FiMapPin aria-hidden="true" /></span>
               <span className="rail__label">{place.name}</span>
               <span className="rail__count">{stats.byPlace.get(place.name) ?? 0}</span>
             </button>
@@ -317,12 +331,11 @@ export function Sidebar({
           className={`rail__item${selection.view === 'settings' ? ' rail__item--active' : ''}`}
           onClick={() => onSelect({ ...selection, view: 'settings', projectId: null, categoryId: null, place: null })}
         >
-          <span className="rail__glyph">⚙</span> Settings
+          <span className="rail__glyph"><FiSettings aria-hidden="true" /></span> Settings
         </button>
         <button type="button" className="rail__item" onClick={onOpenManual}>
-          <span className="rail__glyph">?</span> User manual
+          <span className="rail__glyph"><FiBookOpen aria-hidden="true" /></span> User manual
         </button>
-        <span className="rail__status rail__status--on">Local-first · Offline ready</span>
       </div>
     </aside>
   );

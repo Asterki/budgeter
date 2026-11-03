@@ -4,6 +4,7 @@
  */
 
 import type { RecurrenceFreq, RecurrenceRule } from '../domain/types';
+import { FiRepeat } from 'react-icons/fi';
 import { WEEKDAYS_MIN, todayISO } from '../domain/date';
 import { createRecurrence, describeRecurrence } from '../domain/recurrence';
 
@@ -136,7 +137,9 @@ export function RecurrenceEditor({ value, dateISO, onChange }: RecurrenceEditorP
             </label>
           </div>
 
-          <p className="recurrence__summary">🔁 {describeRecurrence(value)}</p>
+          <p className="recurrence__summary">
+            <FiRepeat aria-hidden="true" /> {describeRecurrence(value)}
+          </p>
         </>
       )}
     </div>

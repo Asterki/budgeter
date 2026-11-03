@@ -4,6 +4,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import type { Task } from '../domain/types';
 import {
   addDays,
@@ -96,13 +97,13 @@ export function CalendarView({ onOpenTask }: CalendarViewProps) {
         </div>
         <div className="calendar__toolbar">
           <button type="button" className="button" onClick={() => shift(-1)} aria-label="Previous period">
-            ‹
+            <FiChevronLeft aria-hidden="true" />
           </button>
           <button type="button" className="button" onClick={goToday}>
             Today
           </button>
           <button type="button" className="button" onClick={() => shift(1)} aria-label="Next period">
-            ›
+            <FiChevronRight aria-hidden="true" />
           </button>
           <div className="segmented">
             <button

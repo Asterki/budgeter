@@ -33,7 +33,7 @@ Category        Work, Personal, …            ← groups projects
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  Tasker      [ Search tasks ]        ( 3 ) 🔥4 ⚡2× ✓7   ☾ ?  ＋Task │
+│ [ Search tasks ]                   ( 3 ) ↑4 ⚡2× ✓7   ☾ ?  + Add task │
 ├───────────────┬──────────────────────────────────────────────────────────┤
 │ Scheduled     │                                                          │
 │ Today         │                     Active view                          │
@@ -41,22 +41,22 @@ Category        Work, Personal, …            ← groups projects
 │ All tasks     │                                                          │
 │ Completed     │                                                          │
 │ ───────────   │                                                          │
-│ CATEGORIES ＋ │                                                          │
+│ CATEGORIES +  │                                                          │
 │  ▾ ● Work     │                                                          │
 │     ● Tasker  │  ← thin progress bar under each project                  │
-│     ＋ Project│                                                          │
+│     + Project │                                                          │
 │  ▾ ● Personal │                                                          │
 │ ───────────   │                                                          │
 │ PLACES        │                                                          │
 │  @desk @home  │                                                          │
 ├───────────────┴──────────────────────────────────────────────────────────┤
-│ ⚙ Settings   ? User manual        ● Local-first · Offline ready          │
+│ Settings   User manual              ● Local-first · Offline ready        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-The window controls sit in the top-left corner, the global menu bar spans the top
-edge, and the left rail holds navigation. Clicking a task opens the detail panel
-on the right.
+The global menu bar spans the top edge with search on the left and utility
+actions on the right. The left rail holds navigation. Clicking a task opens the
+detail panel on the right.
 
 The badge in the top bar is your **progress HUD**: level ring, streak, current
 combo and how many you have finished today. Click it for the full breakdown.
@@ -193,7 +193,7 @@ Finishing something should feel like finishing something.
 - **Levels** — 100 XP for level 2, 200 more for level 3, and so on. The ring in
   the top bar fills as you go and a toast announces each level.
 - **Streak** — consecutive days with at least one completion, with your best
-  streak kept forever. The flame only goes out after a full day is skipped.
+  streak kept forever. The current streak resets only after a full day is skipped.
 - **Achievements** — twelve of them, from *First step* to *Veteran*, listed in the
   HUD and in Settings. Unlocking one raises a toast.
 - **Daily milestones** — 1, 3, 5, 10 and 20 completions in a day get a shout.
@@ -315,7 +315,9 @@ Once connected:
 - **Disconnect** stops syncing and clears the sync metadata. Your tasks stay.
   Reconnecting merges this device with the remote space; where the same record
   changed on both sides, the newest change wins.
-- XP, streaks and achievements are personal to each device and are never synced.
+- XP, streaks and achievements sync with the rest of the space. Each device merges
+  the record it receives, so counters take the highest value and achievements are
+  unioned.
 
 Importing a JSON backup is blocked while sync is connected. Disconnect first.
 

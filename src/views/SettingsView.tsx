@@ -3,6 +3,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { FiLock, FiTrendingUp } from 'react-icons/fi';
 import type { BackupFile, Category, Settings } from '../domain/types';
 import { formatDateShort, todayISO } from '../domain/date';
 import { completionsByDay, currentStreak, levelForXp, ACHIEVEMENTS } from '../domain/progress';
@@ -202,7 +203,10 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
             {plannedToday > 0 && <span className="muted"> / {plannedToday} planned</span>}
           </span>
           <span className="stat">
-            <strong>🔥 {streak}</strong> day streak
+            <strong>
+              <FiTrendingUp aria-hidden="true" /> {streak}
+            </strong>{' '}
+            day streak
           </span>
           <span className="stat">
             <strong>{progress.bestStreak}</strong> best streak
@@ -251,8 +255,8 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
               value={settings.theme}
               onChange={(event) => patch({ theme: event.target.value as Settings['theme'] })}
             >
-              <option value="nordic-light">Nordic Light</option>
-              <option value="nordic-dark">Nordic Dark</option>
+              <option value="nordic-light">GitHub Light</option>
+              <option value="nordic-dark">GitHub Dark</option>
             </select>
           </label>
         </div>
@@ -273,7 +277,7 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
                   className={`badge${owned ? ' badge--owned' : ''}`}
                   title={achievement.description}
                 >
-                  <span aria-hidden="true">{owned ? achievement.icon : '🔒'}</span>
+                  <span aria-hidden="true">{owned ? achievement.icon : <FiLock />}</span>
                   {achievement.title}
                 </span>
               );
@@ -360,8 +364,9 @@ export function SettingsView({ onOpenManual }: SettingsViewProps) {
         <h2 className="card__title">Sync</h2>
         <p className="card__hint">
           Optional end-to-end encrypted sync through your own relay. Your passphrase never leaves
-          this device; only ciphertext is stored on the server. Lose the passphrase and the sync
-          space cannot be recovered.
+          this device; only ciphertext is stored on the server. Tasks, projects, settings, XP,
+          streaks and achievements all follow you. Lose the passphrase and the sync space cannot
+          be recovered.
         </p>
 
         {syncInfo ? (

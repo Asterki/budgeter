@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { FiX } from 'react-icons/fi';
 
 interface BottomSheetProps {
   open: boolean;
@@ -99,7 +100,7 @@ export function BottomSheet({ open, title, onClose, children, footer, accent }: 
               {title}
             </span>
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close panel">
-              ✕
+              <FiX aria-hidden="true" />
             </button>
           </div>
         </div>

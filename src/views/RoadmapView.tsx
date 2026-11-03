@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import type { Task } from '../domain/types';
 import {
   addDays,
@@ -116,13 +117,13 @@ export function RoadmapView({ onOpenTask }: RoadmapViewProps) {
         </div>
         <div className="calendar__toolbar">
           <button type="button" className="button" onClick={() => setWindowStart(addMonths(windowStart, -1))} aria-label="Previous month">
-            ‹
+            <FiChevronLeft aria-hidden="true" />
           </button>
           <button type="button" className="button" onClick={() => setWindowStart(startOfMonth(todayISO()))}>
             Today
           </button>
           <button type="button" className="button" onClick={() => setWindowStart(addMonths(windowStart, 1))} aria-label="Next month">
-            ›
+            <FiChevronRight aria-hidden="true" />
           </button>
           <div className="segmented">
             <button
@@ -231,7 +232,7 @@ export function RoadmapView({ onOpenTask }: RoadmapViewProps) {
           <span className="group__count">{unscheduled.length}</span>
         </header>
         {unscheduled.length === 0 ? (
-          <p className="muted">Every open task has a date. 🎉</p>
+          <p className="muted">Every open task has a date.</p>
         ) : (
           <ul className="task-list">
             {unscheduled.map((task) => (

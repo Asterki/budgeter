@@ -6,6 +6,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { FiCheck, FiLock, FiSmartphone, FiTrendingUp, FiVolume2, FiVolumeX, FiZap } from 'react-icons/fi';
 import { formatDateShort, todayISO } from '../domain/date';
 import {
   ACHIEVEMENTS,
@@ -65,17 +66,20 @@ export function ProgressHud() {
         </span>
         {streak > 0 && (
           <span className="hud__streak" title={`${streak} day streak`}>
-            🔥{streak}
+            <FiTrendingUp aria-hidden="true" />
+            {streak}
           </span>
         )}
         {comboing && (
           <span className="hud__combo" title={`${progress.combo}× combo — keep going`}>
-            ⚡{Math.min(progress.combo, 5)}×
+            <FiZap aria-hidden="true" />
+            {Math.min(progress.combo, 5)}×
           </span>
         )}
         {doneToday > 0 && (
           <span className="hud__today" title={`${doneToday} completed today`}>
-            ✓{doneToday}
+            <FiCheck aria-hidden="true" />
+            {doneToday}
           </span>
         )}
       </button>
@@ -98,7 +102,7 @@ export function ProgressHud() {
                 title={settings.soundEnabled ? 'Mute completion sound' : 'Play a sound on completion'}
                 aria-pressed={settings.soundEnabled}
               >
-                {settings.soundEnabled ? '🔈' : '🔇'}
+                {settings.soundEnabled ? <FiVolume2 aria-hidden="true" /> : <FiVolumeX aria-hidden="true" />}
               </button>
               <button
                 type="button"
@@ -107,7 +111,7 @@ export function ProgressHud() {
                 title={settings.hapticsEnabled ? 'Turn off vibration' : 'Vibrate on completion'}
                 aria-pressed={settings.hapticsEnabled}
               >
-                📳
+                <FiSmartphone aria-hidden="true" />
               </button>
             </header>
 
@@ -145,7 +149,7 @@ export function ProgressHud() {
                 {plannedToday === 0
                   ? 'Nothing scheduled today'
                   : goalRatio >= 1
-                    ? 'Today is cleared 🎉'
+                    ? 'Today is cleared'
                     : `${plannedToday - doneToday} left today`}
               </span>
               <span className="hud__goal-track" aria-hidden="true">
@@ -183,7 +187,7 @@ export function ProgressHud() {
                       className={`badge${owned ? ' badge--owned' : ''}`}
                       title={`${achievement.title} — ${achievement.description}`}
                     >
-                      <span aria-hidden="true">{owned ? achievement.icon : '🔒'}</span>
+                      <span aria-hidden="true">{owned ? achievement.icon : <FiLock />}</span>
                       {achievement.title}
                     </span>
                   );

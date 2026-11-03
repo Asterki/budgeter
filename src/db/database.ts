@@ -198,7 +198,7 @@ export function normalizeProject(project: Project): Project {
   return {
     id: project.id,
     name: project.name ?? 'Project',
-    color: project.color ?? '#6E839A',
+    color: project.color ?? '#58a6ff',
     categoryId: project.categoryId ?? null,
     tags: project.tags ?? [],
     order: project.order ?? 0,
@@ -209,7 +209,10 @@ export function normalizeProject(project: Project): Project {
 export function normalizeSettings(stored: Partial<Settings> | null | undefined): Settings {
   const value = stored ?? {};
   return {
-    theme: value.theme === 'nordic-dark' ? 'nordic-dark' : 'nordic-light',
+    theme:
+      value.theme === 'nordic-dark' || value.theme === 'nordic-light'
+        ? value.theme
+        : DEFAULT_SETTINGS.theme,
     defaultProjectId: value.defaultProjectId ?? null,
     progress: { ...DEFAULT_SETTINGS.progress, ...(value.progress ?? {}) },
     soundEnabled: value.soundEnabled ?? false,

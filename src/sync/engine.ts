@@ -9,6 +9,7 @@
 import {
   db,
   clearSyncStores,
+  clearOutboxForEntity,
   deleteEntitySilently,
   getVersion,
   listOutbox,
@@ -26,6 +27,7 @@ import {
   type OutboxRecord,
 } from '../db/database';
 import type { Place, Project, Settings, Task } from '../domain/types';
+import { mergeProgress } from '../domain/progress';
 import { decryptPayload, deriveKeys, encryptPayload } from './crypto';
 import { compareHlc, epochHlc, HlcClock } from './hlc';
 import { configureRecorder, entityPayload } from './recorder';
@@ -502,26 +504,47 @@ async function applyRemote(
     console.warn('Skipping a sync change that could not be decrypted.');
     return false;
   }
-  await writeMerged(change.entityType, change.entityId, payload);
+  const mergedSettings = await writeMerged(change.entityType, change.entityId, payload);
   await putVersion({
     entityType: change.entityType,
     entityId: change.entityId,
     hlc: change.hlc,
     deleted: false,
   });
+  // If the merge added local-only achievements or counters, publish the union
+  // back so the other device receives it too.
+  if (mergedSettings) await enqueueSettings(mergedSettings);
   return true;
 }
 
-async function writeMerged(kind: EntityKind, id: string, payload: unknown): Promise<void> {
+async function enqueueSettings(settings: Settings): Promise<void> {
+  if (!runtime) return;
+  const hlc = runtime.clock.next();
+  await clearOutboxForEntity('settings', 'app');
+  await putOutbox({
+    changeId: crypto.randomUUID(),
+    entityType: 'settings',
+    entityId: 'app',
+    hlc,
+    deleted: false,
+    payload: entityPayload('settings', settings),
+  });
+  await putVersion({ entityType: 'settings', entityId: 'app', hlc, deleted: false });
+  runtime.config.lastHlc = hlc;
+  await writeSyncState('app', runtime.config);
+}
+
+async function writeMerged(kind: EntityKind, id: string, payload: unknown): Promise<Settings | null> {
   if (kind === 'settings') {
     const local = await db.settings.get();
+    const remote = normalizeSettings(payload as Partial<Settings>);
     const merged = normalizeSettings({
       ...local,
-      ...(payload as Partial<Settings>),
-      progress: local.progress,
+      ...remote,
+      progress: mergeProgress(local.progress, remote.progress),
     });
     await writeEntitySilently('settings', merged);
-    return;
+    return JSON.stringify(merged.progress) === JSON.stringify(remote.progress) ? null : merged;
   }
 
   if (kind === 'task') {
@@ -529,7 +552,7 @@ async function writeMerged(kind: EntityKind, id: string, payload: unknown): Prom
     const remote = normalizeTask({ ...(payload as Task), id });
     if (local) remote.tags = unionStrings(local.tags, remote.tags);
     await writeEntitySilently('task', remote);
-    return;
+    return null;
   }
 
   if (kind === 'project') {
@@ -537,10 +560,11 @@ async function writeMerged(kind: EntityKind, id: string, payload: unknown): Prom
     const remote = normalizeProject({ ...(payload as Project), id });
     if (local) remote.tags = unionTags(local.tags, remote.tags);
     await writeEntitySilently('project', remote);
-    return;
+    return null;
   }
 
   await writeEntitySilently(kind, { ...(payload as Place), id });
+  return null;
 }
 
 function unionStrings(a: string[], b: string[]): string[] {

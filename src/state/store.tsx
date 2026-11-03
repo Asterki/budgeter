@@ -48,11 +48,11 @@ import {
 } from '../sync/engine';
 
 export const PROJECT_COLORS = [
-  '#263BAA', '#6E839A', '#4C8C8C', '#8C6E9E', '#B06A4F',
-  '#5A7D9A', '#3F7A5E', '#9E7B3F', '#7A6C8C', '#A14F5A',
+  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff',
+  '#39c5cf', '#db61a2', '#8b949e', '#a5d6ff', '#ffa657',
 ];
 
-export const CATEGORY_COLORS = ['#263BAA', '#6E839A', '#4C8C8C', '#8C6E9E', '#B06A4F', '#5A7D9A'];
+export const CATEGORY_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39c5cf'];
 
 const BACKUP_VERSION = 3;
 

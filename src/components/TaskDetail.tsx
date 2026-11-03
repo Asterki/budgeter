@@ -4,6 +4,7 @@
  */
 
 import { useMemo } from 'react';
+import { FiX } from 'react-icons/fi';
 import type { Priority, Task } from '../domain/types';
 import { formatDate, formatTime, spanLength, todayISO } from '../domain/date';
 import { RecurrenceEditor } from './RecurrenceEditor';
@@ -296,7 +297,7 @@ export function TaskDetail({ task, onClose, onOpenTask }: TaskDetailProps) {
                     onClick={() => removeTag(project.id, tag.id)}
                     aria-label={`Delete tag ${tag.name}`}
                   >
-                    ✕
+                    <FiX aria-hidden="true" />
                   </button>
                 </span>
               );

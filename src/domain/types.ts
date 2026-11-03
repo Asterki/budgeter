@@ -131,6 +131,8 @@ export interface Progress {
   checklistsCleared: number;
   /** Unlocked achievement ids. */
   unlocked: string[];
+  /** Epoch ms of the last progress mutation, used to order synced records. */
+  updatedAt: number;
 }
 
 export const EMPTY_PROGRESS: Progress = {
@@ -147,6 +149,7 @@ export const EMPTY_PROGRESS: Progress = {
   lastComboAt: null,
   checklistsCleared: 0,
   unlocked: [],
+  updatedAt: 0,
 };
 
 export interface Settings {
@@ -162,7 +165,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'nordic-light',
+  theme: 'nordic-dark',
   defaultProjectId: null,
   progress: {
     xp: 0,
@@ -178,6 +181,7 @@ export const DEFAULT_SETTINGS: Settings = {
     lastComboAt: null,
     checklistsCleared: 0,
     unlocked: [],
+    updatedAt: 0,
   },
   soundEnabled: false,
   hapticsEnabled: true,

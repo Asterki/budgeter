@@ -23,10 +23,10 @@ encrypted changes in the background.
 | Views | Scheduled (all dated tasks grouped by day), Tasks (debounced filter, sort, group), Calendar (multi-day spans, month/week), Roadmap (lane timeline, week/day zoom) |
 | Metadata | Priority 1–4, places, start/end dates, start/end times, all-day vs. micro-scheduled timeframes |
 | Recurrence | Daily / weekly / monthly / yearly plus custom intervals, weekday picks, day-of-month, end date, occurrence cap |
-| Rewards | XP with a combo multiplier, levels, streaks, 12 achievements, daily milestones, and a 6-second Undo on every completion |
+| Rewards | XP with a combo multiplier, levels, streaks, 12 achievements, daily milestones, and a 6-second Undo on every completion — synced across devices |
 | Feedback | Particle bursts at the checkbox, optional chime, haptic patterns, and toasts — all respecting `prefers-reduced-motion` |
 | Storage | IndexedDB, fully offline, JSON export / import / reset |
-| Sync | Optional end-to-end encrypted relay sync across devices (your own server) |
+| Sync | Optional end-to-end encrypted relay sync across devices (your own server), including XP, streaks and achievements |
 | PWA | Installable, custom `sw.js`, offline-first caching |
 
 ---
@@ -76,7 +76,8 @@ small relay in [`server/`](./server) — a single Express process with SQLite.
 - The passphrase is stretched in the browser (PBKDF2-SHA-256, 600k rounds); the
   relay only receives a derived authentication key and AES-GCM ciphertext.
 - Each entity is a UUID. Every change carries a hybrid logical clock, and merge
-  is last-writer-wins with tag union for tasks and projects.
+  is last-writer-wins with tag union for tasks and projects. Progress counters
+  take the highest value and achievements are unioned.
 - The relay stores an append-only log plus the latest entity per id, so devices
   catch up by polling. Tombstones are retained for 90 days.
 - Tasker queues changes in IndexedDB while offline and pushes them when the

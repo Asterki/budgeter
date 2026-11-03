@@ -178,6 +178,7 @@ export function applyCompletion(
     bestCombo: Math.max(progress.bestCombo, combo),
     lastComboAt: at,
     checklistsCleared: progress.checklistsCleared + (clearedParentId ? 1 : 0),
+    updatedAt: at,
   };
 
   const achievements = newlyUnlocked(next);
@@ -215,6 +216,62 @@ export function revertCompletion(progress: Progress, undo: CompletionUndo): Prog
     xp: Math.max(0, progress.xp - undo.xpGain),
     totalCompleted: Math.max(0, progress.totalCompleted - 1),
     todayCount: Math.max(0, progress.todayCount - 1),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Folds progress from another device into the local record.
+ *
+ * Counters only ever grow, so they take the highest value; achievements are
+ * unioned; day-specific fields follow the most recent completion. The result is
+ * deterministic, so two devices converge after one exchange.
+ */
+export function mergeProgress(local: Progress, remote: Progress): Progress {
+  const a: Progress = { ...EMPTY_PROGRESS, ...local, unlocked: local.unlocked ?? [] };
+  const b: Progress = { ...EMPTY_PROGRESS, ...remote, unlocked: remote.unlocked ?? [] };
+
+  const latestDate =
+    !a.lastCompletionDate || (b.lastCompletionDate && b.lastCompletionDate > a.lastCompletionDate)
+      ? b.lastCompletionDate
+      : a.lastCompletionDate;
+
+  // A streak belongs to the most recent chain, not simply the largest number.
+  let streak: number;
+  if (a.lastCompletionDate === b.lastCompletionDate) streak = Math.max(a.streak, b.streak);
+  else streak = a.lastCompletionDate === latestDate ? a.streak : b.streak;
+
+  const latestToday =
+    !a.todayDate || (b.todayDate && b.todayDate > a.todayDate) ? b.todayDate : a.todayDate;
+  const todayCount =
+    a.todayDate === b.todayDate && a.todayDate !== null
+      ? Math.max(a.todayCount, b.todayCount)
+      : a.todayDate === latestToday
+        ? a.todayCount
+        : b.todayCount;
+
+  const latestRecord = b.updatedAt > a.updatedAt ? b : a;
+
+  return {
+    xp: Math.max(a.xp, b.xp),
+    totalCompleted: Math.max(a.totalCompleted, b.totalCompleted),
+    streak,
+    bestStreak: Math.max(a.bestStreak, b.bestStreak),
+    lastCompletionDate: latestDate,
+    todayCount,
+    todayDate: latestToday,
+    bestDayCount: Math.max(a.bestDayCount, b.bestDayCount),
+    combo: latestRecord.combo,
+    bestCombo: Math.max(a.bestCombo, b.bestCombo),
+    lastComboAt:
+      a.lastComboAt === null
+        ? b.lastComboAt
+        : b.lastComboAt === null
+          ? a.lastComboAt
+          : Math.max(a.lastComboAt, b.lastComboAt),
+    checklistsCleared: Math.max(a.checklistsCleared, b.checklistsCleared),
+    unlocked: Array.from(new Set([...a.unlocked, ...b.unlocked])).sort(),
+    updatedAt: Math.max(a.updatedAt, b.updatedAt),
   };
 }
 

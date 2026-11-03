@@ -76,9 +76,9 @@ interface CelebrationApi {
 const CelebrationContext = createContext<CelebrationApi | null>(null);
 
 const TONE_COLORS: Record<Tone, string[]> = {
-  normal: ['#263BAA', '#8FA8BE', '#4C8C8C', '#6E839A'],
-  checklist: ['#3F7A5E', '#8FA8BE', '#263BAA', '#9E7B3F'],
-  level: ['#C07F2E', '#263BAA', '#3F7A5E', '#8C6E9E', '#C2453D', '#263BAA'],
+  normal: ['#3fb950', '#58a6ff', '#39c5cf', '#8b949e'],
+  checklist: ['#3fb950', '#58a6ff', '#d29922', '#bc8cff'],
+  level: ['#d29922', '#58a6ff', '#3fb950', '#bc8cff', '#f85149', '#39c5cf'],
 };
 
 /** Haptic patterns (ms on, ms off…), scaled by how big the moment is. */

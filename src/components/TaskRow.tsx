@@ -7,6 +7,7 @@
  */
 
 import { useState, type MouseEvent } from 'react';
+import { FiCheck, FiChevronDown, FiChevronRight, FiFileText, FiFlag, FiPlus, FiRepeat } from 'react-icons/fi';
 import type { Priority, Task } from '../domain/types';
 import { formatTaskRange, formatTime, todayISO } from '../domain/date';
 import { describeRecurrence } from '../domain/recurrence';
@@ -105,7 +106,7 @@ export function TaskRow({
         aria-pressed={task.completed}
       >
         <span className="checkbox__mark" aria-hidden="true">
-          ✓
+          <FiCheck />
         </span>
       </button>
 
@@ -140,10 +141,14 @@ export function TaskRow({
           ))}
           {task.recurrence && (
             <span className="meta meta--recur" title={describeRecurrence(task.recurrence)}>
-              🔁
+              <FiRepeat aria-hidden="true" />
             </span>
           )}
-          {task.notes && <span className="meta meta--muted">📝</span>}
+          {task.notes && (
+            <span className="meta meta--muted" title="Has notes">
+              <FiFileText aria-hidden="true" />
+            </span>
+          )}
         </span>
       </button>
 
@@ -156,7 +161,7 @@ export function TaskRow({
             title="Add subtask"
             aria-label={`Add subtask to ${task.title}`}
           >
-            ＋
+            <FiPlus aria-hidden="true" />
           </button>
         )}
 
@@ -169,7 +174,7 @@ export function TaskRow({
             title={expanded ? 'Hide subtasks' : 'Show subtasks'}
           >
             <span className="subtask-toggle__caret" aria-hidden="true">
-              {expanded ? '▾' : '▸'}
+              {expanded ? <FiChevronDown /> : <FiChevronRight />}
             </span>
             {doneChildCount}/{childCount}
           </button>
@@ -182,7 +187,7 @@ export function TaskRow({
           title={PRIORITY_LABEL[task.priority]}
           aria-label={PRIORITY_LABEL[task.priority]}
         >
-          {task.priority === 4 ? '⚑' : `!${task.priority}`}
+          {task.priority === 4 ? <FiFlag aria-hidden="true" /> : `!${task.priority}`}
         </button>
       </div>
     </li>

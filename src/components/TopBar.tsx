@@ -1,11 +1,11 @@
 /**
  * Global menu bar.
  *
- * Follows the Nordic "quiet chrome" convention: the window controls sit at the
- * far left, the brand sits next to them, and the search + primary action sit on
- * the right so the eye always lands on the left edge first.
+ * Search lives on the left, utility actions on the right. The shell has no
+ * logo or window chrome — the workspace itself carries the identity.
  */
 
+import { FiHelpCircle, FiMoon, FiPlus, FiSearch, FiSun } from 'react-icons/fi';
 import type { Settings } from '../domain/types';
 import { ProgressHud } from './ProgressHud';
 
@@ -21,20 +21,8 @@ export function TopBar({ theme, onToggleTheme, onFocusSearch, onFocusQuickAdd, o
   return (
     <header className="topbar">
       <div className="topbar__left">
-        <div className="window-controls" aria-hidden="true">
-          <span className="window-control window-control--close" />
-          <span className="window-control window-control--min" />
-          <span className="window-control window-control--max" />
-        </div>
-        <span className="brand">
-          <span className="brand__mark">T</span>
-          Tasker
-        </span>
-      </div>
-
-      <div className="topbar__center">
         <button type="button" className="search-trigger" onClick={onFocusSearch}>
-          <span aria-hidden="true">⌕</span>
+          <FiSearch aria-hidden="true" />
           <span className="search-trigger__label">Search tasks</span>
           <kbd>/</kbd>
         </button>
@@ -49,13 +37,14 @@ export function TopBar({ theme, onToggleTheme, onFocusSearch, onFocusQuickAdd, o
           title={theme === 'nordic-light' ? 'Switch to dark' : 'Switch to light'}
           aria-label="Toggle theme"
         >
-          {theme === 'nordic-light' ? '☾' : '☀'}
+          {theme === 'nordic-light' ? <FiMoon aria-hidden="true" /> : <FiSun aria-hidden="true" />}
         </button>
         <button type="button" className="icon-button" onClick={onOpenManual} title="User manual" aria-label="User manual">
-          ?
+          <FiHelpCircle aria-hidden="true" />
         </button>
         <button type="button" className="button button--primary" onClick={onFocusQuickAdd}>
-          ＋ Add task
+          <FiPlus aria-hidden="true" />
+          Add task
         </button>
       </div>
     </header>
