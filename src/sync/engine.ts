@@ -68,7 +68,7 @@ const ENTITY_KINDS: EntityKind[] = [
   'settings',
 ];
 const BATCH = 200;
-const POLL_MS = 20_000;
+const POLL_MS = 10_000;
 const TIMEOUT_MS = 20_000;
 
 const idleStatus: SyncStatus = {
@@ -248,8 +248,9 @@ export async function connectSync(
   publish({ configured: true, state: 'syncing', pending: 0, lastSyncAt: 0, error: null });
 
   try {
-    // Joining an existing space: seed at the epoch so remote history wins.
-    // Creating a space: seed with real timestamps so these rows are canonical.
+    // Joining an existing space: seed at the epoch so the space's history wins
+    // conflicts, while local-only rows are still inserted. Creating a space:
+    // seed with real timestamps so these rows become the canonical history.
     await seedLocal(config, head.exists ? () => epochHlc(config.clientId) : () => runtime!.clock.next());
     await writeSyncState('app', config);
     if (head.exists) await snapshotPull(config);
@@ -287,11 +288,14 @@ export async function disconnectSync(): Promise<void> {
 }
 
 /**
- * Queues every local entity at the epoch HLC. The relay only accepts a change
- * when it is newer than what it already holds, so an old local copy can never
- * outrank a newer remote one.
+ * Queues every local entity so the relay receives the complete dataset.
+ * Rows are stamped by the caller: epoch for an existing space, real time for
+ * a new one.
  */
-async function seedLocal(config: SyncConfig, nextHlc: () => string): Promise<void> {
+async function seedLocal(
+  config: SyncConfig,
+  nextHlc: (kind: EntityKind, value: unknown) => string,
+): Promise<void> {
   const groups: Array<{ kind: EntityKind; values: unknown[] }> = [
     { kind: 'account', values: await db.accounts.all() },
     { kind: 'categoryGroup', values: await db.categoryGroups.all() },
@@ -310,7 +314,7 @@ async function seedLocal(config: SyncConfig, nextHlc: () => string): Promise<voi
       if (!id) continue;
       if (await getVersion(group.kind, id)) continue;
 
-      const hlc = nextHlc();
+      const hlc = nextHlc(group.kind, value);
       const record: OutboxRecord = {
         changeId: crypto.randomUUID(),
         entityType: group.kind,

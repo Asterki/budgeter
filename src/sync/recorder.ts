@@ -51,18 +51,9 @@ export function configureRecorder(nextConfig: SyncConfig | null, nextClock: HlcC
 
 export function entityPayload(kind: EntityKind, value: unknown): unknown {
   if (kind === 'settings') {
-    const settings = value as Settings;
-    return {
-      theme: settings.theme,
-      currency: settings.currency,
-      locale: settings.locale,
-      firstDayOfWeek: settings.firstDayOfWeek,
-      weekStartsOn: settings.weekStartsOn,
-      soundEnabled: settings.soundEnabled,
-      hapticsEnabled: settings.hapticsEnabled,
-      hideBalances: settings.hideBalances,
-      progress: settings.progress,
-    };
+    // Spread every field so new settings (privacy, locale, future toggles)
+    // are carried without another protocol change.
+    return { ...(value as Settings) };
   }
 
   switch (kind) {

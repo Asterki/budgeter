@@ -584,6 +584,10 @@ export function SettingsView() {
                     : 'Not synced yet'}
                 </span>
               </div>
+              <p className="settings-row__hint">
+                Accounts, categories and groups, payees, transactions (both transfer legs),
+                budgets, recurring rules, categorization rules and settings sync automatically.
+              </p>
               <div className="button-row">
                 <button
                   type="button"

@@ -64,7 +64,12 @@ export function TopBar({
 
       <div className="topbar__actions">
         <ProgressHud progress={settings.progress} />
-        <button type="button" className="icon-button" onClick={onSearch} aria-label="Search transactions">
+        <button
+          type="button"
+          className="icon-button topbar__search"
+          onClick={onSearch}
+          aria-label="Search transactions"
+        >
           <FiSearch />
         </button>
         <kbd className="topbar__kbd">/</kbd>
@@ -78,7 +83,7 @@ export function TopBar({
         </button>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button topbar__theme"
           onClick={onToggleTheme}
           aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         >
