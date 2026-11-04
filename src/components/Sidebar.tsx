@@ -1,7 +1,16 @@
 /** Left navigation rail: ledger scopes, accounts, category groups and payees. */
 
 import { useMemo, useState } from 'react';
-import { FiChevronRight, FiPlus, FiSearch, FiSettings } from 'react-icons/fi';
+import {
+  FiBarChart2,
+  FiCalendar,
+  FiChevronRight,
+  FiPieChart,
+  FiPlus,
+  FiSearch,
+  FiSettings,
+  FiTrendingUp,
+} from 'react-icons/fi';
 
 import { useBudget } from '../state/store';
 import type { NavSelection, TransactionScope, ViewKey } from '../state/navigation';
@@ -15,6 +24,13 @@ interface SidebarProps {
   onAddAccount: () => void;
   onEditAccount: (account: Account) => void;
 }
+
+const PRIMARY_VIEWS: { view: ViewKey; label: string; icon: typeof FiPieChart }[] = [
+  { view: 'budget', label: 'Budget', icon: FiPieChart },
+  { view: 'calendar', label: 'Calendar', icon: FiCalendar },
+  { view: 'reports', label: 'Reports', icon: FiBarChart2 },
+  { view: 'forecast', label: 'Forecast', icon: FiTrendingUp },
+];
 
 export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: SidebarProps) {
   const { accounts, categories, categoryGroups, payees, transactions, settings } = useBudget();
@@ -85,22 +101,42 @@ export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: Si
   return (
     <nav className="rail" aria-label="Ledger navigation">
       <div className="rail__scroll">
-        <p className="rail__label">Ledger</p>
-        <button
-          type="button"
-          className={`rail__item${isActive({ kind: 'all' }) ? ' rail__item--active' : ''}`}
-          onClick={() => selectScope({ kind: 'all' })}
-        >
-          <span>All transactions</span>
-        </button>
-        <button
-          type="button"
-          className={`rail__item${isActive({ kind: 'uncategorized' }) ? ' rail__item--active' : ''}`}
-          onClick={() => selectScope({ kind: 'uncategorized' })}
-        >
-          <span>Uncategorized</span>
-          <span className="rail__count">{uncategorizedCount}</span>
-        </button>
+        <p className="rail__label">Views</p>
+        {PRIMARY_VIEWS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.view}
+              type="button"
+              className={`rail__item${
+                selection.view === item.view ? ' rail__item--active' : ''
+              }`}
+              onClick={() => onSelect({ ...selection, view: item.view })}
+            >
+              <Icon aria-hidden="true" />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+
+        <div className="rail__section">
+          <p className="rail__label">Ledger</p>
+          <button
+            type="button"
+            className={`rail__item${isActive({ kind: 'all' }) ? ' rail__item--active' : ''}`}
+            onClick={() => selectScope({ kind: 'all' })}
+          >
+            <span>All transactions</span>
+          </button>
+          <button
+            type="button"
+            className={`rail__item${isActive({ kind: 'uncategorized' }) ? ' rail__item--active' : ''}`}
+            onClick={() => selectScope({ kind: 'uncategorized' })}
+          >
+            <span>Uncategorized</span>
+            <span className="rail__count">{uncategorizedCount}</span>
+          </button>
+        </div>
 
         <div className="rail__section">
           <p className="rail__label">
@@ -121,7 +157,12 @@ export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: Si
                 <span className="dot" style={{ background: account.color }} aria-hidden="true" />
                 <span className="rail__name">{account.name}</span>
                 <span className="rail__balance">
-                  {formatMoney(balances.get(account.id) ?? 0, settings.currency, settings.locale)}
+                  {formatMoney(
+                    balances.get(account.id) ?? 0,
+                    settings.currency,
+                    settings.locale,
+                    settings.hideBalances,
+                  )}
                 </span>
               </button>
               <button
