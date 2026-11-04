@@ -34,6 +34,8 @@ const HLC_PATTERN = /^\d{15}-\d{6}-[A-Za-z0-9-]{6,64}$/;
 /** Must match src/sync/protocol.ts. */
 const SYNC_PROTOCOL_VERSION = 2;
 const SYNC_SCHEMA_VERSION = 6;
+const PROTOCOL_HEADER = "X-Budget-Sync-Protocol";
+const SCHEMA_HEADER = "X-Budget-Sync-Schema";
 const LEGACY_ENTITY_TYPES = new Set(["task", "project", "place"]);
 
 const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
@@ -56,7 +58,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("Vary", "Origin");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Authorization, Content-Type, X-Budget-Sync-Protocol",
+      `Authorization, Content-Type, ${PROTOCOL_HEADER}, ${SCHEMA_HEADER}`,
     );
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.setHeader("Access-Control-Max-Age", "86400");
@@ -122,8 +124,8 @@ app.get("/health", (_req, res) => {
  * Budget clients always announce both the wire protocol and data schema.
  */
 app.use("/v1/sync", (req: Request, res: Response, next: NextFunction) => {
-  const protocol = req.get("x-budget-sync-protocol") ?? "";
-  const schema = req.get("x-budget-sync-schema") ?? "";
+  const protocol = req.get(PROTOCOL_HEADER) ?? "";
+  const schema = req.get(SCHEMA_HEADER) ?? "";
 
   if (
     protocol !== String(SYNC_PROTOCOL_VERSION) ||
