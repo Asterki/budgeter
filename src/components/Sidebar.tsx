@@ -1,342 +1,217 @@
-/**
- * Desktop navigation rail.
- *
- * Smart lists on top, then the category -> project tree, then places. The tree
- * collapses per category so a large workspace stays scannable.
- */
+/** Left navigation rail: ledger scopes, accounts, category groups and payees. */
 
 import { useMemo, useState } from 'react';
-import {
-  FiBookOpen,
-  FiCalendar,
-  FiCheckCircle,
-  FiChevronDown,
-  FiChevronRight,
-  FiInbox,
-  FiList,
-  FiMapPin,
-  FiMoreHorizontal,
-  FiPlus,
-  FiSettings,
-  FiStar,
-} from 'react-icons/fi';
-import type { Category, Project } from '../domain/types';
-import type { NavSelection } from '../state/navigation';
-import { todayISO } from '../domain/date';
-import { useTasker } from '../state/store';
+import { FiChevronRight, FiPlus, FiSearch, FiSettings } from 'react-icons/fi';
+
+import { useBudget } from '../state/store';
+import type { NavSelection, TransactionScope, ViewKey } from '../state/navigation';
+import { formatMoney } from '../domain/money';
+import { accountBalance } from '../domain/money';
+import type { Account } from '../domain/types';
 
 interface SidebarProps {
   selection: NavSelection;
   onSelect: (selection: NavSelection) => void;
-  onCreateCategory: () => void;
-  onCreateProject: (categoryId: string | null) => void;
-  onCategoryMenu: (category: Category) => void;
-  onProjectMenu: (project: Project) => void;
-  onOpenManual: () => void;
+  onAddAccount: () => void;
+  onEditAccount: (account: Account) => void;
 }
 
-export function Sidebar({
-  selection,
-  onSelect,
-  onCreateCategory,
-  onCreateProject,
-  onCategoryMenu,
-  onProjectMenu,
-  onOpenManual,
-}: SidebarProps) {
-  const { tasks, categories, projects, places } = useTasker();
-  const today = todayISO();
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: SidebarProps) {
+  const { accounts, categories, categoryGroups, payees, transactions, settings } = useBudget();
+  const [payeeQuery, setPayeeQuery] = useState('');
 
-  const stats = useMemo(() => {
-    const open = tasks.filter((task) => !task.completed);
-    const byProject = new Map<string, number>();
-    const byCategory = new Map<string, number>();
-    const projectById = new Map(projects.map((project) => [project.id, project]));
-    const byPlace = new Map<string, number>();
-    const progressByProject = new Map<string, { done: number; total: number }>();
+  const balances = useMemo(
+    () => new Map(accounts.map((account) => [account.id, accountBalance(account, transactions)])),
+    [accounts, transactions],
+  );
 
-    for (const task of tasks) {
-      if (!task.projectId) continue;
-      const bucket = progressByProject.get(task.projectId) ?? { done: 0, total: 0 };
-      bucket.total += 1;
-      if (task.completed) bucket.done += 1;
-      progressByProject.set(task.projectId, bucket);
+  const payeeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const transaction of transactions) {
+      if (transaction.payeeId) counts.set(transaction.payeeId, (counts.get(transaction.payeeId) ?? 0) + 1);
     }
+    return counts;
+  }, [transactions]);
 
-    for (const task of open) {
-      if (task.projectId) {
-        byProject.set(task.projectId, (byProject.get(task.projectId) ?? 0) + 1);
-        const categoryId = projectById.get(task.projectId)?.categoryId;
-        if (categoryId) byCategory.set(categoryId, (byCategory.get(categoryId) ?? 0) + 1);
-      }
-      if (task.place) byPlace.set(task.place, (byPlace.get(task.place) ?? 0) + 1);
-    }
+  const uncategorizedCount = useMemo(
+    () =>
+      transactions.filter(
+        (transaction) => transaction.type !== 'transfer' && transaction.categoryId === null,
+      ).length,
+    [transactions],
+  );
 
-    return {
-      scheduled: open.filter((task) => task.date).length,
-      today: open.filter((task) => task.date === today).length,
-      inbox: open.filter((task) => !task.projectId).length,
-      all: open.length,
-      completed: tasks.filter((task) => task.completed).length,
-      byProject,
-      byCategory,
-      byPlace,
-      progressByProject,
-    };
-  }, [tasks, projects, today]);
-
-  const isScope = (scope: NavSelection['scope']) =>
-    selection.view === 'tasks' && selection.scope === scope;
-
-  const select = (scope: NavSelection['scope'], extra: Partial<NavSelection> = {}) =>
-    onSelect({ view: 'tasks', scope, projectId: null, categoryId: null, place: null, ...extra });
-
-  function toggleCategory(id: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  function selectScope(scope: TransactionScope) {
+    onSelect({ ...selection, view: 'transactions', scope });
   }
 
-  const uncategorised = projects.filter((project) => !project.categoryId);
+  function isActive(scope: TransactionScope): boolean {
+    if (selection.view !== 'transactions') return false;
+    if (selection.scope.kind !== scope.kind) return false;
+    switch (scope.kind) {
+      case 'account':
+        return selection.scope.kind === 'account' && selection.scope.accountId === scope.accountId;
+      case 'group':
+        return selection.scope.kind === 'group' && selection.scope.groupId === scope.groupId;
+      case 'payee':
+        return selection.scope.kind === 'payee' && selection.scope.payeeId === scope.payeeId;
+      case 'all':
+      case 'uncategorized':
+        return true;
+    }
+  }
 
-  function renderProject(project: Project) {
-    const active = isScope('project') && selection.projectId === project.id;
-    const ratio = stats.progressByProject.get(project.id);
-    const percent = ratio && ratio.total > 0 ? Math.round((ratio.done / ratio.total) * 100) : 0;
-    return (
-      <div className="rail__row" key={project.id}>
-        <button
-          type="button"
-          className={`rail__item rail__item--nested${active ? ' rail__item--active' : ''}`}
-          onClick={() => select('project', { projectId: project.id })}
-        >
-          <span className="dot" style={{ background: project.color }} />
-          <span className="rail__label">{project.name}</span>
-          <span className="rail__count">{stats.byProject.get(project.id) ?? 0}</span>
-        </button>
-        {ratio && ratio.total > 0 && (
-          <span
-            className="rail__progress"
-            title={`${ratio.done} of ${ratio.total} done`}
-            aria-hidden="true"
-          >
-            <span style={{ width: `${percent}%` }} />
-          </span>
-        )}
-        <button
-          type="button"
-          className="rail__more"
-          onClick={() => onProjectMenu(project)}
-          aria-label={`Manage project ${project.name}`}
-        >
-          <FiMoreHorizontal aria-hidden="true" />
-        </button>
-      </div>
-    );
+  const activeAccounts = accounts.filter((account) => !account.archived);
+  const archivedAccounts = accounts.filter((account) => account.archived);
+  const filteredPayees = payees
+    .filter((payee) => payee.name.toLowerCase().includes(payeeQuery.trim().toLowerCase()))
+    .slice(0, 12);
+
+  const groupRows = [
+    ...categoryGroups.map((group) => ({ id: group.id, name: group.name })),
+    ...(categories.some((category) => category.groupId === null)
+      ? [{ id: '', name: 'No group' }]
+      : []),
+  ];
+
+  function groupCategoryNames(groupId: string): string {
+    return categories
+      .filter((category) => (category.groupId ?? '') === groupId && !category.archived)
+      .map((category) => category.name)
+      .slice(0, 3)
+      .join(' · ');
   }
 
   return (
-    <aside className="rail" aria-label="Primary navigation">
-      <nav className="rail__group">
-        <span className="rail__heading">Smart lists</span>
+    <nav className="rail" aria-label="Ledger navigation">
+      <div className="rail__scroll">
+        <p className="rail__label">Ledger</p>
         <button
           type="button"
-          className={`rail__item${isScope('scheduled') ? ' rail__item--active' : ''}`}
-          onClick={() => select('scheduled')}
+          className={`rail__item${isActive({ kind: 'all' }) ? ' rail__item--active' : ''}`}
+          onClick={() => selectScope({ kind: 'all' })}
         >
-          <span className="rail__glyph"><FiCalendar aria-hidden="true" /></span> Scheduled
-          <span className="rail__count">{stats.scheduled}</span>
+          <span>All transactions</span>
         </button>
         <button
           type="button"
-          className={`rail__item${isScope('today') ? ' rail__item--active' : ''}`}
-          onClick={() => select('today')}
+          className={`rail__item${isActive({ kind: 'uncategorized' }) ? ' rail__item--active' : ''}`}
+          onClick={() => selectScope({ kind: 'uncategorized' })}
         >
-          <span className="rail__glyph"><FiStar aria-hidden="true" /></span> Today
-          <span className="rail__count">{stats.today}</span>
+          <span>Uncategorized</span>
+          <span className="rail__count">{uncategorizedCount}</span>
         </button>
-        <button
-          type="button"
-          className={`rail__item${isScope('inbox') ? ' rail__item--active' : ''}`}
-          onClick={() => select('inbox')}
-        >
-          <span className="rail__glyph"><FiInbox aria-hidden="true" /></span> Inbox
-          <span className="rail__count">{stats.inbox}</span>
-        </button>
-        <button
-          type="button"
-          className={`rail__item${isScope('all') ? ' rail__item--active' : ''}`}
-          onClick={() => select('all')}
-        >
-          <span className="rail__glyph"><FiList aria-hidden="true" /></span> All tasks
-          <span className="rail__count">{stats.all}</span>
-        </button>
-        <button
-          type="button"
-          className={`rail__item${isScope('completed') ? ' rail__item--active' : ''}`}
-          onClick={() => select('completed')}
-        >
-          <span className="rail__glyph"><FiCheckCircle aria-hidden="true" /></span> Completed
-          <span className="rail__count">{stats.completed}</span>
-        </button>
-      </nav>
 
-      <nav className="rail__group">
-        <span className="rail__heading">
-          Categories
-          <button
-            type="button"
-            className="rail__add"
-            onClick={onCreateCategory}
-            aria-label="New category"
-            title="New category"
-          >
-            <FiPlus aria-hidden="true" />
-          </button>
-        </span>
-
-        {categories.length === 0 && uncategorised.length === 0 && (
-          <p className="rail__empty">Group projects into categories like “Work”.</p>
-        )}
-
-        {categories.map((category) => {
-          const owned = projects.filter((project) => project.categoryId === category.id);
-          const isCollapsed = collapsed.has(category.id);
-          const active = isScope('category') && selection.categoryId === category.id;
-
-          return (
-            <div className="rail__category" key={category.id}>
-              <div className="rail__row">
-                <button
-                  type="button"
-                  className={`rail__item rail__item--category${active ? ' rail__item--active' : ''}`}
-                  onClick={() => select('category', { categoryId: category.id })}
-                >
-                  <span
-                    className="rail__caret"
-                    role="presentation"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleCategory(category.id);
-                    }}
-                  >
-                    {isCollapsed ? <FiChevronRight aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
-                  </span>
-                  <span className="dot" style={{ background: category.color }} />
-                  <span className="rail__label">{category.name}</span>
-                  <span className="rail__count">{stats.byCategory.get(category.id) ?? 0}</span>
-                </button>
-                <button
-                  type="button"
-                  className="rail__more"
-                  onClick={() => onCategoryMenu(category)}
-                  aria-label={`Manage category ${category.name}`}
-                >
-                  <FiMoreHorizontal aria-hidden="true" />
-                </button>
-              </div>
-
-              {!isCollapsed && (
-                <>
-                  {owned.map(renderProject)}
-                  <button
-                    type="button"
-                    className="rail__item rail__item--nested rail__item--ghost"
-                    onClick={() => onCreateProject(category.id)}
-                  >
-                    <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
-                    <span className="rail__label">New project</span>
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-
-        {uncategorised.length > 0 && (
-          <div className="rail__category">
-            <div className="rail__row">
+        <div className="rail__section">
+          <p className="rail__label">
+            Accounts
+            <button type="button" className="rail__add" onClick={onAddAccount} aria-label="Add account">
+              <FiPlus />
+            </button>
+          </p>
+          {activeAccounts.map((account) => (
+            <div key={account.id} className="rail__account">
               <button
                 type="button"
-                className={`rail__item rail__item--category${
-                  isScope('category') && selection.categoryId === null ? ' rail__item--active' : ''
+                className={`rail__item rail__item--account${
+                  isActive({ kind: 'account', accountId: account.id }) ? ' rail__item--active' : ''
                 }`}
-                onClick={() => select('category', { categoryId: null })}
+                onClick={() => selectScope({ kind: 'account', accountId: account.id })}
               >
-                <span
-                  className="rail__caret"
-                  role="presentation"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleCategory('__none__');
-                  }}
-                >
-                  {collapsed.has('__none__') ? <FiChevronRight aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
+                <span className="dot" style={{ background: account.color }} aria-hidden="true" />
+                <span className="rail__name">{account.name}</span>
+                <span className="rail__balance">
+                  {formatMoney(balances.get(account.id) ?? 0, settings.currency, settings.locale)}
                 </span>
-                <span className="rail__label">Uncategorised</span>
-                <span className="rail__count">{uncategorised.length}</span>
+              </button>
+              <button
+                type="button"
+                className="rail__edit"
+                onClick={() => onEditAccount(account)}
+                aria-label={`Edit ${account.name}`}
+                title="Edit account"
+              >
+                <FiChevronRight />
               </button>
             </div>
-            {!collapsed.has('__none__') && (
-              <>
-                {uncategorised.map(renderProject)}
+          ))}
+          {archivedAccounts.length > 0 && (
+            <div className="rail__archived">
+              {archivedAccounts.map((account) => (
                 <button
+                  key={account.id}
                   type="button"
-                  className="rail__item rail__item--nested rail__item--ghost"
-                  onClick={() => onCreateProject(null)}
+                  className="rail__item rail__item--muted"
+                  onClick={() => selectScope({ kind: 'account', accountId: account.id })}
                 >
-                  <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
-                  <span className="rail__label">New project</span>
+                  <span className="rail__name">{account.name}</span>
+                  <span className="rail__count">Archived</span>
                 </button>
-              </>
-            )}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
 
-        {(categories.length > 0 || uncategorised.length === 0) && (
-          <button type="button" className="rail__item rail__item--ghost" onClick={() => onCreateProject(null)}>
-            <span className="rail__glyph"><FiPlus aria-hidden="true" /></span>
-            <span className="rail__label">New project</span>
-          </button>
-        )}
-      </nav>
-
-      {places.length > 0 && (
-        <nav className="rail__group">
-          <span className="rail__heading">Places</span>
-          {places.map((place) => (
+        <div className="rail__section">
+          <p className="rail__label">Categories</p>
+          {groupRows.map((group) => (
             <button
-              key={place.id}
+              key={group.id || 'ungrouped'}
               type="button"
-              className={`rail__item${
-                isScope('place') && selection.place === place.name ? ' rail__item--active' : ''
+              className={`rail__item rail__item--stacked${
+                isActive({ kind: 'group', groupId: group.id }) ? ' rail__item--active' : ''
               }`}
-              onClick={() => select('place', { place: place.name })}
+              onClick={() => selectScope({ kind: 'group', groupId: group.id })}
             >
-              <span className="rail__glyph"><FiMapPin aria-hidden="true" /></span>
-              <span className="rail__label">{place.name}</span>
-              <span className="rail__count">{stats.byPlace.get(place.name) ?? 0}</span>
+              <span>{group.name}</span>
+              <span className="rail__sub">{groupCategoryNames(group.id) || 'No categories'}</span>
             </button>
           ))}
-        </nav>
-      )}
+        </div>
+
+        <div className="rail__section">
+          <p className="rail__label">Payees</p>
+          <label className="rail__search">
+            <FiSearch aria-hidden="true" />
+            <input
+              value={payeeQuery}
+              onChange={(event) => setPayeeQuery(event.target.value)}
+              placeholder="Search payees"
+              aria-label="Search payees"
+            />
+          </label>
+          {filteredPayees.length > 0 ? (
+            filteredPayees.map((payee) => (
+              <button
+                key={payee.id}
+                type="button"
+                className={`rail__item${
+                  isActive({ kind: 'payee', payeeId: payee.id }) ? ' rail__item--active' : ''
+                }`}
+                onClick={() => selectScope({ kind: 'payee', payeeId: payee.id })}
+              >
+                <span className="rail__name">{payee.name}</span>
+                <span className="rail__count">{payeeCounts.get(payee.id) ?? 0}</span>
+              </button>
+            ))
+          ) : (
+            <p className="rail__empty">
+              {payeeQuery ? 'No matching payees' : 'Type to find a payee'}
+            </p>
+          )}
+        </div>
+      </div>
 
       <div className="rail__footer">
         <button
           type="button"
           className={`rail__item${selection.view === 'settings' ? ' rail__item--active' : ''}`}
-          onClick={() => onSelect({ ...selection, view: 'settings', projectId: null, categoryId: null, place: null })}
+          onClick={() => onSelect({ ...selection, view: 'settings' as ViewKey })}
         >
-          <span className="rail__glyph"><FiSettings aria-hidden="true" /></span> Settings
-        </button>
-        <button type="button" className="rail__item" onClick={onOpenManual}>
-          <span className="rail__glyph"><FiBookOpen aria-hidden="true" /></span> User manual
+          <FiSettings aria-hidden="true" />
+          <span>Settings</span>
         </button>
       </div>
-    </aside>
+    </nav>
   );
 }

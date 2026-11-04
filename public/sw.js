@@ -1,12 +1,12 @@
 /*
- * Tasker service worker.
+ * Budget service worker.
  *
  * Owns the offline-first cache so the app shell boots with no network at all.
  * It is intentionally dependency-free and versioned by CACHE_VERSION.
  */
 
 const BUILD_ID = '__BUILD_ID__';
-const CACHE_VERSION = `tasker-${BUILD_ID}`;
+const CACHE_VERSION = `budget-${BUILD_ID}`;
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 

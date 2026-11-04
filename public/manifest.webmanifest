@@ -1,7 +1,7 @@
 {
-  "name": "Tasker",
-  "short_name": "Tasker",
-  "description": "A local-first, offline-capable todo and planning app with natural-language capture, calendar and roadmap views.",
+  "name": "Budget",
+  "short_name": "Budget",
+  "description": "A local-first, offline-capable personal budgeting app.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -10,7 +10,16 @@
   "orientation": "any",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
-  "categories": ["productivity", "utilities"],
+  "categories": ["finance", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Add transaction",
+      "short_name": "Add",
+      "description": "Open the new transaction form",
+      "url": "/?action=add",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
   "icons": [
     {
       "src": "/icons/icon-192.png",

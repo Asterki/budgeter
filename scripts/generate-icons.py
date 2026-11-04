@@ -1,4 +1,4 @@
-"""Generate Tasker PWA icons (flat Nordic brand mark) with no dependencies."""
+"""Generate Budget PWA icons (flat Nordic brand mark) with no dependencies."""
 
 import struct
 import zlib

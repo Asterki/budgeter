@@ -1,24 +1,38 @@
 /**
  * IndexedDB persistence layer.
  *
- * Tasker is local-first: this module is the single source of truth for every
- * task, project, category, place and setting. There is no server-side database —
- * the app works fully offline. Sync metadata (outbox, versions, keys) lives in
- * separate stores so domain records stay clean.
+ * Budget is local-first: this module is the single source of truth for every
+ * account, category, payee, transaction, budget and setting. There is no
+ * server-side database — the app works fully offline. Sync metadata (outbox,
+ * versions, keys) lives in separate stores so domain records stay clean.
  */
 
-import type { Category, Place, Project, Settings, Tag, Task } from '../domain/types';
+import type {
+  Account,
+  Budget,
+  CategorizationRule,
+  Category,
+  CategoryGroup,
+  Payee,
+  RecurringRule,
+  Settings,
+  Transaction,
+} from '../domain/types';
 import { DEFAULT_SETTINGS } from '../domain/types';
 
-const DB_NAME = 'tasker';
-/** v2 added `categories` and multi-day fields; v3 removed push; v4 added sync. */
-const DB_VERSION = 4;
+const DB_NAME = 'budget';
+/** v5 introduced the budgeting schema; v6 added categorization rules. */
+const DB_VERSION = 6;
 
 export const STORE = {
-  tasks: 'tasks',
+  accounts: 'accounts',
   categories: 'categories',
-  projects: 'projects',
-  places: 'places',
+  categoryGroups: 'categoryGroups',
+  payees: 'payees',
+  transactions: 'transactions',
+  budgets: 'budgets',
+  recurring: 'recurring',
+  rules: 'rules',
   settings: 'settings',
 } as const;
 
@@ -29,9 +43,19 @@ export const SYNC_STORE = {
 } as const;
 
 export type StoreName = (typeof STORE)[keyof typeof STORE];
-export type EntityKind = 'task' | 'category' | 'project' | 'place' | 'settings';
+export type EntityKind =
+  | 'account'
+  | 'category'
+  | 'categoryGroup'
+  | 'payee'
+  | 'transaction'
+  | 'budget'
+  | 'recurring'
+  | 'rule'
+  | 'settings';
 
 const SETTINGS_KEY = 'app';
+const LEGACY_STORES = ['tasks', 'projects', 'places', 'subscriptions'];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -59,28 +83,45 @@ export function openDatabase(): Promise<IDBDatabase> {
     open.onupgradeneeded = () => {
       const db = open.result;
 
-      if (!db.objectStoreNames.contains(STORE.tasks)) {
-        const tasks = db.createObjectStore(STORE.tasks, { keyPath: 'id' });
-        tasks.createIndex('byDate', 'date');
-        tasks.createIndex('byProject', 'projectId');
-        tasks.createIndex('byCompleted', 'completed');
+      for (const legacy of LEGACY_STORES) {
+        if (db.objectStoreNames.contains(legacy)) db.deleteObjectStore(legacy);
+      }
+
+      if (!db.objectStoreNames.contains(STORE.accounts)) {
+        const accounts = db.createObjectStore(STORE.accounts, { keyPath: 'id' });
+        accounts.createIndex('byOrder', 'order');
       }
       if (!db.objectStoreNames.contains(STORE.categories)) {
-        db.createObjectStore(STORE.categories, { keyPath: 'id' });
+        const categories = db.createObjectStore(STORE.categories, { keyPath: 'id' });
+        categories.createIndex('byGroup', 'groupId');
       }
-      if (!db.objectStoreNames.contains(STORE.projects)) {
-        db.createObjectStore(STORE.projects, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE.categoryGroups)) {
+        db.createObjectStore(STORE.categoryGroups, { keyPath: 'id' });
       }
-      if (!db.objectStoreNames.contains(STORE.places)) {
-        db.createObjectStore(STORE.places, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE.payees)) {
+        db.createObjectStore(STORE.payees, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE.transactions)) {
+        const transactions = db.createObjectStore(STORE.transactions, { keyPath: 'id' });
+        transactions.createIndex('byDate', 'date');
+        transactions.createIndex('byAccount', 'accountId');
+        transactions.createIndex('byCategory', 'categoryId');
+      }
+      if (!db.objectStoreNames.contains(STORE.budgets)) {
+        const budgets = db.createObjectStore(STORE.budgets, { keyPath: 'id' });
+        budgets.createIndex('byMonth', 'month');
+      }
+      if (!db.objectStoreNames.contains(STORE.recurring)) {
+        const recurring = db.createObjectStore(STORE.recurring, { keyPath: 'id' });
+        recurring.createIndex('byNextDate', 'nextDate');
+      }
+      if (!db.objectStoreNames.contains(STORE.rules)) {
+        db.createObjectStore(STORE.rules, { keyPath: 'id' });
       }
       if (!db.objectStoreNames.contains(STORE.settings)) {
         db.createObjectStore(STORE.settings);
       }
-      // v3: reminders are gone, so the push-subscription store is no longer needed.
-      if (db.objectStoreNames.contains('subscriptions')) {
-        db.deleteObjectStore('subscriptions');
-      }
+
       if (!db.objectStoreNames.contains(SYNC_STORE.outbox)) {
         const outbox = db.createObjectStore(SYNC_STORE.outbox, { keyPath: 'changeId' });
         outbox.createIndex('byEntity', ['entityType', 'entityId']);
@@ -139,6 +180,7 @@ async function putValue<T>(store: StoreName, value: T, key?: IDBValidKey): Promi
 }
 
 async function putValues<T>(store: StoreName, values: T[]): Promise<void> {
+  if (values.length === 0) return;
   const db = await openDatabase();
   const tx = db.transaction(store, 'readwrite');
   const target = tx.objectStore(store);
@@ -164,107 +206,241 @@ async function clearStore(store: StoreName): Promise<void> {
 
 /* ── Schema normalisation ─────────────────────────────────────────────────── */
 
+function wholeCents(value: unknown): number {
+  return Number.isFinite(value) ? Math.round(value as number) : 0;
+}
+
+function timestamp(value: unknown): number {
+  return Number.isFinite(value) ? (value as number) : Date.now();
+}
+
 /**
  * Fills in fields added after a record was written. Records are stored
  * verbatim, so older rows simply read back with the new fields defaulted.
  */
-export function normalizeTask(task: Task): Task {
+export function normalizeAccount(account: Partial<Account>): Account {
   return {
-    id: task.id,
-    title: task.title ?? 'Untitled task',
-    notes: task.notes ?? '',
-    projectId: task.projectId ?? null,
-    parentId: task.parentId ?? null,
-    place: task.place ?? null,
-    priority: task.priority ?? 4,
-    date: task.date ?? null,
-    time: task.time ?? null,
-    endDate: task.endDate ?? task.date ?? null,
-    endTime: task.endTime ?? null,
-    allDay: task.allDay ?? !task.time,
-    tags: task.tags ?? [],
-    lane: task.lane ?? '',
-    recurrence: task.recurrence ?? null,
-    completed: task.completed ?? false,
-    completedAt: task.completedAt ?? null,
-    seriesId: task.seriesId ?? task.id,
-    order: task.order ?? 0,
-    createdAt: task.createdAt ?? Date.now(),
-    updatedAt: task.updatedAt ?? task.createdAt ?? Date.now(),
+    id: account.id ?? '',
+    name: account.name ?? 'Account',
+    type: account.type ?? 'checking',
+    color: account.color ?? '#58a6ff',
+    openingBalance: wholeCents(account.openingBalance),
+    ...(account.currency ? { currency: account.currency } : {}),
+    archived: account.archived ?? false,
+    order: account.order ?? 0,
+    createdAt: timestamp(account.createdAt),
+    updatedAt: timestamp(account.updatedAt ?? account.createdAt),
   };
 }
 
-export function normalizeProject(project: Project): Project {
+export function normalizeCategory(category: Partial<Category>): Category {
   return {
-    id: project.id,
-    name: project.name ?? 'Project',
-    color: project.color ?? '#58a6ff',
-    categoryId: project.categoryId ?? null,
-    tags: project.tags ?? [],
-    order: project.order ?? 0,
-    createdAt: project.createdAt ?? Date.now(),
+    id: category.id ?? '',
+    name: category.name ?? 'Category',
+    color: category.color ?? '#58a6ff',
+    kind: category.kind ?? 'expense',
+    groupId: category.groupId ?? null,
+    order: category.order ?? 0,
+    archived: category.archived ?? false,
+    createdAt: timestamp(category.createdAt),
+    updatedAt: timestamp(category.updatedAt ?? category.createdAt),
+  };
+}
+
+export function normalizeCategoryGroup(group: Partial<CategoryGroup>): CategoryGroup {
+  return {
+    id: group.id ?? '',
+    name: group.name ?? 'Group',
+    order: group.order ?? 0,
+  };
+}
+
+export function normalizePayee(payee: Partial<Payee>): Payee {
+  return {
+    id: payee.id ?? '',
+    name: payee.name ?? 'Payee',
+    defaultCategoryId: payee.defaultCategoryId ?? null,
+    createdAt: timestamp(payee.createdAt),
+  };
+}
+
+export function normalizeTransaction(transaction: Partial<Transaction>): Transaction {
+  return {
+    id: transaction.id ?? '',
+    accountId: transaction.accountId ?? '',
+    date: transaction.date ?? '',
+    amount: wholeCents(transaction.amount),
+    type: transaction.type ?? 'expense',
+    categoryId: transaction.categoryId ?? null,
+    payeeId: transaction.payeeId ?? null,
+    transferAccountId: transaction.transferAccountId ?? null,
+    transferPairId: transaction.transferPairId ?? null,
+    notes: transaction.notes ?? '',
+    tags: transaction.tags ?? [],
+    cleared: transaction.cleared ?? false,
+    recurringId: transaction.recurringId ?? null,
+    createdAt: timestamp(transaction.createdAt),
+    updatedAt: timestamp(transaction.updatedAt ?? transaction.createdAt),
+  };
+}
+
+export function normalizeBudget(budget: Partial<Budget>): Budget {
+  return {
+    id: budget.id ?? '',
+    categoryId: budget.categoryId ?? '',
+    month: budget.month ?? '',
+    limit: wholeCents(budget.limit),
+    rollover: budget.rollover ?? false,
+    createdAt: timestamp(budget.createdAt),
+    updatedAt: timestamp(budget.updatedAt ?? budget.createdAt),
+  };
+}
+
+export function normalizeCategoryRule(rule: Partial<CategorizationRule>): CategorizationRule {
+  return {
+    id: rule.id ?? '',
+    pattern: rule.pattern ?? '',
+    categoryId: rule.categoryId ?? '',
+    createdAt: timestamp(rule.createdAt),
+    updatedAt: timestamp(rule.updatedAt ?? rule.createdAt),
+  };
+}
+
+export function normalizeRecurring(rule: Partial<RecurringRule>): RecurringRule {  return {
+    id: rule.id ?? '',
+    accountId: rule.accountId ?? '',
+    amount: wholeCents(rule.amount),
+    type: rule.type ?? 'expense',
+    categoryId: rule.categoryId ?? null,
+    payeeId: rule.payeeId ?? null,
+    transferAccountId: rule.transferAccountId ?? null,
+    notes: rule.notes ?? '',
+    tags: rule.tags ?? [],
+    cleared: rule.cleared ?? false,
+    recurrence: rule.recurrence ?? {
+      freq: 'monthly',
+      interval: 1,
+      byWeekday: [],
+      byMonthDay: [],
+      until: null,
+      count: null,
+    },
+    nextDate: rule.nextDate ?? '',
+    lastGeneratedDate: rule.lastGeneratedDate ?? null,
+    active: rule.active ?? true,
+    createdAt: timestamp(rule.createdAt),
+    updatedAt: timestamp(rule.updatedAt ?? rule.createdAt),
   };
 }
 
 export function normalizeSettings(stored: Partial<Settings> | null | undefined): Settings {
   const value = stored ?? {};
+  const storedTheme = (value as { theme?: unknown }).theme;
+  const storedProgress = (value.progress ?? {}) as {
+    unlocked?: unknown;
+    evaluatedMonths?: unknown;
+    rewarded?: unknown;
+  };
   return {
+    // Older builds stored `nordic-light` / `nordic-dark`; map them to the
+    // current ids so restored backups and existing devices keep their theme.
     theme:
-      value.theme === 'nordic-dark' || value.theme === 'nordic-light'
-        ? value.theme
-        : DEFAULT_SETTINGS.theme,
-    defaultProjectId: value.defaultProjectId ?? null,
-    progress: { ...DEFAULT_SETTINGS.progress, ...(value.progress ?? {}) },
+      storedTheme === 'dark' || storedTheme === 'nordic-dark'
+        ? 'dark'
+        : storedTheme === 'light' || storedTheme === 'nordic-light'
+          ? 'light'
+          : DEFAULT_SETTINGS.theme,
+    currency: value.currency ?? DEFAULT_SETTINGS.currency,
+    locale: value.locale ?? DEFAULT_SETTINGS.locale,
+    firstDayOfWeek: value.firstDayOfWeek ?? DEFAULT_SETTINGS.firstDayOfWeek,
+    weekStartsOn: value.weekStartsOn ?? DEFAULT_SETTINGS.weekStartsOn,
+    progress: {
+      ...DEFAULT_SETTINGS.progress,
+      ...storedProgress,
+      unlocked: Array.isArray(storedProgress.unlocked) ? storedProgress.unlocked : [],
+      evaluatedMonths: Array.isArray(storedProgress.evaluatedMonths)
+        ? storedProgress.evaluatedMonths
+        : [],
+      rewarded: Array.isArray(storedProgress.rewarded) ? storedProgress.rewarded : [],
+    },
     soundEnabled: value.soundEnabled ?? false,
     hapticsEnabled: value.hapticsEnabled ?? true,
+    hideBalances: value.hideBalances ?? false,
   };
 }
 
 export interface DatabaseSnapshot {
-  tasks: Task[];
+  accounts: Account[];
   categories: Category[];
-  projects: Project[];
-  places: Place[];
+  categoryGroups: CategoryGroup[];
+  payees: Payee[];
+  transactions: Transaction[];
+  budgets: Budget[];
+  recurring: RecurringRule[];
+  rules: CategorizationRule[];
   settings: Settings;
 }
 
 /** Loads the complete application state in one shot (used on boot). */
 export async function loadSnapshot(): Promise<DatabaseSnapshot> {
   const db = await openDatabase();
-  const tx = db.transaction([STORE.tasks, STORE.categories, STORE.projects, STORE.places, STORE.settings], 'readonly');
+  const tx = db.transaction(
+    [
+      STORE.accounts,
+      STORE.categories,
+      STORE.categoryGroups,
+      STORE.payees,
+      STORE.transactions,
+      STORE.budgets,
+      STORE.recurring,
+      STORE.rules,
+      STORE.settings,
+    ],
+    'readonly',
+  );
 
-  const [tasks, categories, projects, places, settings] = await Promise.all([
-    request(tx.objectStore(STORE.tasks).getAll() as IDBRequest<Task[]>),
+  const [
+    accounts,
+    categories,
+    categoryGroups,
+    payees,
+    transactions,
+    budgets,
+    recurring,
+    rules,
+    settings,
+  ] = await Promise.all([
+    request(tx.objectStore(STORE.accounts).getAll() as IDBRequest<Account[]>),
     request(tx.objectStore(STORE.categories).getAll() as IDBRequest<Category[]>),
-    request(tx.objectStore(STORE.projects).getAll() as IDBRequest<Project[]>),
-    request(tx.objectStore(STORE.places).getAll() as IDBRequest<Place[]>),
+    request(tx.objectStore(STORE.categoryGroups).getAll() as IDBRequest<CategoryGroup[]>),
+    request(tx.objectStore(STORE.payees).getAll() as IDBRequest<Payee[]>),
+    request(tx.objectStore(STORE.transactions).getAll() as IDBRequest<Transaction[]>),
+    request(tx.objectStore(STORE.budgets).getAll() as IDBRequest<Budget[]>),
+    request(tx.objectStore(STORE.recurring).getAll() as IDBRequest<RecurringRule[]>),
+    request(tx.objectStore(STORE.rules).getAll() as IDBRequest<CategorizationRule[]>),
     request(tx.objectStore(STORE.settings).get(SETTINGS_KEY) as IDBRequest<Settings | undefined>),
   ]);
 
   return {
-    tasks: tasks.map(normalizeTask),
-    categories: categories.sort((a, b) => a.order - b.order),
-    projects: projects.map(normalizeProject).sort((a, b) => a.order - b.order),
-    places,
+    accounts: accounts.map(normalizeAccount).sort((a, b) => a.order - b.order),
+    categories: categories.map(normalizeCategory).sort((a, b) => a.order - b.order),
+    categoryGroups: categoryGroups.map(normalizeCategoryGroup).sort((a, b) => a.order - b.order),
+    payees: payees.map(normalizePayee).sort((a, b) => a.name.localeCompare(b.name)),
+    transactions: transactions.map(normalizeTransaction).sort((a, b) => b.date.localeCompare(a.date)),
+    budgets: budgets.map(normalizeBudget),
+    recurring: recurring.map(normalizeRecurring).sort((a, b) => a.nextDate.localeCompare(b.nextDate)),
+    rules: rules.map(normalizeCategoryRule).sort((a, b) => a.pattern.localeCompare(b.pattern)),
     settings: normalizeSettings(settings),
   };
 }
 
 export const db = {
-  tasks: {
-    all: () => readAll<Task>(STORE.tasks),
-    put: (task: Task) => putValue(STORE.tasks, task),
-    putMany: (tasks: Task[]) => putValues(STORE.tasks, tasks),
-    remove: (id: string) => deleteValue(STORE.tasks, id),
-    removeMany: async (ids: string[]) => {
-      const database = await openDatabase();
-      const tx = database.transaction(STORE.tasks, 'readwrite');
-      const store = tx.objectStore(STORE.tasks);
-      for (const id of ids) store.delete(id);
-      await transactionDone(tx);
-      emitMutation({ store: STORE.tasks, puts: [], deletes: ids });
-    },
-    clear: () => clearStore(STORE.tasks),
+  accounts: {
+    all: () => readAll<Account>(STORE.accounts),
+    put: (account: Account) => putValue(STORE.accounts, account),
+    putMany: (accounts: Account[]) => putValues(STORE.accounts, accounts),
+    remove: (id: string) => deleteValue(STORE.accounts, id),
+    clear: () => clearStore(STORE.accounts),
   },
   categories: {
     all: () => readAll<Category>(STORE.categories),
@@ -273,19 +449,78 @@ export const db = {
     remove: (id: string) => deleteValue(STORE.categories, id),
     clear: () => clearStore(STORE.categories),
   },
-  projects: {
-    all: () => readAll<Project>(STORE.projects),
-    put: (project: Project) => putValue(STORE.projects, project),
-    putMany: (projects: Project[]) => putValues(STORE.projects, projects),
-    remove: (id: string) => deleteValue(STORE.projects, id),
-    clear: () => clearStore(STORE.projects),
+  categoryGroups: {
+    all: () => readAll<CategoryGroup>(STORE.categoryGroups),
+    put: (group: CategoryGroup) => putValue(STORE.categoryGroups, group),
+    putMany: (groups: CategoryGroup[]) => putValues(STORE.categoryGroups, groups),
+    remove: (id: string) => deleteValue(STORE.categoryGroups, id),
+    clear: () => clearStore(STORE.categoryGroups),
   },
-  places: {
-    all: () => readAll<Place>(STORE.places),
-    put: (place: Place) => putValue(STORE.places, place),
-    putMany: (places: Place[]) => putValues(STORE.places, places),
-    remove: (id: string) => deleteValue(STORE.places, id),
-    clear: () => clearStore(STORE.places),
+  payees: {
+    all: () => readAll<Payee>(STORE.payees),
+    put: (payee: Payee) => putValue(STORE.payees, payee),
+    putMany: (payees: Payee[]) => putValues(STORE.payees, payees),
+    remove: (id: string) => deleteValue(STORE.payees, id),
+    clear: () => clearStore(STORE.payees),
+  },
+  transactions: {
+    all: () => readAll<Transaction>(STORE.transactions),
+    put: (transaction: Transaction) => putValue(STORE.transactions, transaction),
+    putMany: (transactions: Transaction[]) => putValues(STORE.transactions, transactions),
+    /**
+     * Writes both halves of a transfer in one IndexedDB transaction so a crash
+     * can never leave an unbalanced pair behind.
+     */
+    async putTransferPair(from: Transaction, to: Transaction): Promise<void> {
+      const database = await openDatabase();
+      const tx = database.transaction(STORE.transactions, 'readwrite');
+      const store = tx.objectStore(STORE.transactions);
+      store.put(from);
+      store.put(to);
+      await transactionDone(tx);
+      emitMutation({ store: STORE.transactions, puts: [from, to], deletes: [] });
+    },
+    remove: (id: string) => deleteValue(STORE.transactions, id),
+    removeMany: async (ids: string[]) => {
+      if (ids.length === 0) return;
+      const database = await openDatabase();
+      const tx = database.transaction(STORE.transactions, 'readwrite');
+      const store = tx.objectStore(STORE.transactions);
+      for (const id of ids) store.delete(id);
+      await transactionDone(tx);
+      emitMutation({ store: STORE.transactions, puts: [], deletes: ids });
+    },
+    clear: () => clearStore(STORE.transactions),
+  },
+  budgets: {
+    all: () => readAll<Budget>(STORE.budgets),
+    put: (budget: Budget) => putValue(STORE.budgets, budget),
+    putMany: (budgets: Budget[]) => putValues(STORE.budgets, budgets),
+    remove: (id: string) => deleteValue(STORE.budgets, id),
+    removeMany: async (ids: string[]) => {
+      if (ids.length === 0) return;
+      const database = await openDatabase();
+      const tx = database.transaction(STORE.budgets, 'readwrite');
+      const store = tx.objectStore(STORE.budgets);
+      for (const id of ids) store.delete(id);
+      await transactionDone(tx);
+      emitMutation({ store: STORE.budgets, puts: [], deletes: ids });
+    },
+    clear: () => clearStore(STORE.budgets),
+  },
+  recurring: {
+    all: () => readAll<RecurringRule>(STORE.recurring),
+    put: (rule: RecurringRule) => putValue(STORE.recurring, rule),
+    putMany: (rules: RecurringRule[]) => putValues(STORE.recurring, rules),
+    remove: (id: string) => deleteValue(STORE.recurring, id),
+    clear: () => clearStore(STORE.recurring),
+  },
+  rules: {
+    all: () => readAll<CategorizationRule>(STORE.rules),
+    put: (rule: CategorizationRule) => putValue(STORE.rules, rule),
+    putMany: (rules: CategorizationRule[]) => putValues(STORE.rules, rules),
+    remove: (id: string) => deleteValue(STORE.rules, id),
+    clear: () => clearStore(STORE.rules),
   },
   settings: {
     async get(): Promise<Settings> {
@@ -302,10 +537,14 @@ export const db = {
 /** Wipes every domain store — used by the "Reset app" action. */
 export async function clearAll(): Promise<void> {
   await Promise.all([
-    db.tasks.clear(),
+    db.accounts.clear(),
     db.categories.clear(),
-    db.projects.clear(),
-    db.places.clear(),
+    db.categoryGroups.clear(),
+    db.payees.clear(),
+    db.transactions.clear(),
+    db.budgets.clear(),
+    db.recurring.clear(),
+    db.rules.clear(),
     db.settings.clear(),
   ]);
 }
@@ -329,11 +568,26 @@ export interface VersionRecord {
 }
 
 export function entityStore(kind: EntityKind): StoreName {
-  if (kind === 'task') return STORE.tasks;
-  if (kind === 'category') return STORE.categories;
-  if (kind === 'project') return STORE.projects;
-  if (kind === 'place') return STORE.places;
-  return STORE.settings;
+  switch (kind) {
+    case 'account':
+      return STORE.accounts;
+    case 'category':
+      return STORE.categories;
+    case 'categoryGroup':
+      return STORE.categoryGroups;
+    case 'payee':
+      return STORE.payees;
+    case 'transaction':
+      return STORE.transactions;
+    case 'budget':
+      return STORE.budgets;
+    case 'recurring':
+      return STORE.recurring;
+    case 'rule':
+      return STORE.rules;
+    case 'settings':
+      return STORE.settings;
+  }
 }
 
 export async function getVersion(kind: EntityKind, id: string): Promise<VersionRecord | undefined> {
@@ -443,153 +697,6 @@ export async function deleteEntitySilently(kind: EntityKind, id: string): Promis
   const tx = database.transaction(store, 'readwrite');
   tx.objectStore(store).delete(kind === 'settings' ? SETTINGS_KEY : id);
   await transactionDone(tx);
-}
-
-/* ── UUID migration ───────────────────────────────────────────────────────── */
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const UUID_NAMESPACE = [
-  0x6b, 0xa7, 0xb8, 0x81, 0x9d, 0xad, 0x11, 0xd9, 0x9a, 0x3b, 0x00, 0x50, 0x56, 0xc2, 0x00, 0x07,
-];
-const encoder = new TextEncoder();
-
-function isUuid(value: string): boolean {
-  return UUID_PATTERN.test(value);
-}
-
-async function uuidFor(kind: string, id: string): Promise<string> {
-  const name = encoder.encode(`${kind}:${id}`);
-  const bytes = new Uint8Array(UUID_NAMESPACE.length + name.length);
-  bytes.set(UUID_NAMESPACE);
-  bytes.set(name, UUID_NAMESPACE.length);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', bytes)).slice(0, 16);
-  digest[6] = (digest[6] & 0x0f) | 0x50;
-  digest[8] = (digest[8] & 0x3f) | 0x80;
-  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/**
- * Rewrites legacy `tsk_…` identifiers to deterministic UUIDs so devices that
- * already shared data converge instead of duplicating it. Idempotent.
- */
-export async function ensureUuids(): Promise<void> {
-  const marker = await readSyncState<{ done: boolean }>('migration');
-  if (marker?.done) return;
-
-  const database = await openDatabase();
-  const readTx = database.transaction(
-    [STORE.tasks, STORE.categories, STORE.projects, STORE.places, STORE.settings],
-    'readonly',
-  );
-  const [tasks, categories, projects, places, settings] = await Promise.all([
-    request(readTx.objectStore(STORE.tasks).getAll() as IDBRequest<Task[]>),
-    request(readTx.objectStore(STORE.categories).getAll() as IDBRequest<Category[]>),
-    request(readTx.objectStore(STORE.projects).getAll() as IDBRequest<Project[]>),
-    request(readTx.objectStore(STORE.places).getAll() as IDBRequest<Place[]>),
-    request(readTx.objectStore(STORE.settings).get(SETTINGS_KEY) as IDBRequest<Settings | undefined>),
-  ]);
-
-  const categoryIds = new Map<string, string>();
-  const projectIds = new Map<string, string>();
-  const taskIds = new Map<string, string>();
-  const seriesIds = new Map<string, string>();
-  const tagIds = new Map<string, string>();
-
-  for (const category of categories) {
-    if (!isUuid(category.id)) categoryIds.set(category.id, await uuidFor('category', category.id));
-  }
-  for (const project of projects) {
-    if (!isUuid(project.id)) projectIds.set(project.id, await uuidFor('project', project.id));
-    for (const tag of project.tags ?? []) {
-      if (!isUuid(tag.id)) tagIds.set(tag.id, await uuidFor('tag', tag.id));
-    }
-  }
-  for (const task of tasks) {
-    if (!isUuid(task.id)) taskIds.set(task.id, await uuidFor('task', task.id));
-    if (!isUuid(task.seriesId)) {
-      seriesIds.set(task.seriesId, await uuidFor('series', task.seriesId));
-    }
-  }
-
-  const mapId = (map: Map<string, string>, id: string | null): string | null =>
-    id === null ? null : map.get(id) ?? (isUuid(id) ? id : null);
-
-  const nextCategories = categories.map((category) => ({
-    ...category,
-    id: categoryIds.get(category.id) ?? category.id,
-  }));
-
-  const nextProjects = projects.map((project) => ({
-    ...project,
-    id: projectIds.get(project.id) ?? project.id,
-    categoryId: mapId(categoryIds, project.categoryId),
-    tags: (project.tags ?? []).map((tag: Tag) => ({
-      ...tag,
-      id: tagIds.get(tag.id) ?? tag.id,
-    })),
-  }));
-
-  const nextTasks = tasks.map((task) => ({
-    ...task,
-    id: taskIds.get(task.id) ?? task.id,
-    projectId: mapId(projectIds, task.projectId),
-    parentId: mapId(taskIds, task.parentId),
-    seriesId: seriesIds.get(task.seriesId) ?? task.seriesId,
-  }));
-
-  const nextSettings = settings
-    ? { ...settings, defaultProjectId: mapId(projectIds, settings.defaultProjectId ?? null) }
-    : undefined;
-
-  const placeIds = new Map<string, string>();
-  for (const place of places) {
-    if (!isUuid(place.id)) placeIds.set(place.id, await uuidFor('place', place.id));
-  }
-
-  const writeTx = database.transaction(
-    [
-      STORE.tasks,
-      STORE.categories,
-      STORE.projects,
-      STORE.places,
-      STORE.settings,
-      SYNC_STORE.state,
-    ],
-    'readwrite',
-  );
-
-  const taskStore = writeTx.objectStore(STORE.tasks);
-  for (const task of tasks) taskStore.delete(task.id);
-  for (const task of nextTasks) taskStore.put(task);
-
-  const categoryStore = writeTx.objectStore(STORE.categories);
-  for (const category of categories) categoryStore.delete(category.id);
-  for (const category of nextCategories) categoryStore.put(category);
-
-  const projectStore = writeTx.objectStore(STORE.projects);
-  for (const project of projects) projectStore.delete(project.id);
-  for (const project of nextProjects) projectStore.put(project);
-
-  const placeStore = writeTx.objectStore(STORE.places);
-  for (const place of places) {
-    const nextId = placeIds.get(place.id);
-    if (nextId) {
-      placeStore.delete(place.id);
-      placeStore.put({ ...place, id: nextId });
-    }
-  }
-
-  if (nextSettings) writeTx.objectStore(STORE.settings).put(nextSettings, SETTINGS_KEY);
-
-  writeTx.objectStore(SYNC_STORE.state).put({ key: 'migration', value: { done: true } });
-  await transactionDone(writeTx);
-}
-
-/** Re-runs the UUID migration after importing an older backup. */
-export async function resetUuidMigration(): Promise<void> {
-  await deleteSyncState('migration');
 }
 
 /** Generates a collision-resistant id without pulling in a uuid dependency. */

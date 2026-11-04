@@ -1,117 +1,194 @@
-/**
- * Filter / sort / grouping controls for the Tasks view.
- * Search input is debounced by the view before it hits the list.
- */
+/** Toolbar for the ledger: live search, filters and sorting. */
 
-import type { Ref } from 'react';
-import { FiSearch, FiX } from 'react-icons/fi';
-import type { Priority } from '../domain/types';
+import type { RefObject } from 'react';
+import { FiFilter, FiX } from 'react-icons/fi';
 
-export type SortKey = 'date' | 'priority' | 'created' | 'alpha' | 'manual';
-export type GroupKey = 'day' | 'project' | 'priority' | 'place' | 'lane' | 'none';
-
-export interface FilterState {
-  search: string;
-  sort: SortKey;
-  groupBy: GroupKey;
-  priority: Priority | 'all';
-  showCompleted: boolean;
-}
-
-export const DEFAULT_FILTERS: FilterState = {
-  search: '',
-  sort: 'date',
-  groupBy: 'day',
-  priority: 'all',
-  showCompleted: false,
-};
+import type { Account, Category } from '../domain/types';
+import type { LedgerFilters, LedgerSort } from '../domain/ledger';
 
 interface FilterBarProps {
-  filters: FilterState;
-  onChange: (filters: FilterState) => void;
-  resultCount: number;
-  inputRef?: Ref<HTMLInputElement>;
+  filters: LedgerFilters;
+  onChange: (next: LedgerFilters) => void;
+  accounts: Account[];
+  categories: Category[];
+  tags: string[];
+  showAccountFilter: boolean;
+  searchRef: RefObject<HTMLInputElement>;
 }
 
-export function FilterBar({ filters, onChange, resultCount, inputRef }: FilterBarProps) {
-  const patch = (partial: Partial<FilterState>) => onChange({ ...filters, ...partial });
+const SORT_LABELS: { value: LedgerSort; label: string }[] = [
+  { value: 'date-desc', label: 'Newest first' },
+  { value: 'date-asc', label: 'Oldest first' },
+  { value: 'amount-desc', label: 'Largest amount' },
+  { value: 'amount-asc', label: 'Smallest amount' },
+];
+
+export function FilterBar({
+  filters,
+  onChange,
+  accounts,
+  categories,
+  tags,
+  showAccountFilter,
+  searchRef,
+}: FilterBarProps) {
+  function patch(next: Partial<LedgerFilters>) {
+    onChange({ ...filters, ...next });
+  }
+
+  const hasFilters =
+    filters.search ||
+    filters.from ||
+    filters.to ||
+    filters.categoryId !== 'all' ||
+    filters.accountId !== 'all' ||
+    filters.tag ||
+    filters.cleared !== 'all' ||
+    filters.sort !== 'date-desc';
 
   return (
     <div className="filter-bar">
-      <div className="filter-bar__search">
-        <span className="filter-bar__icon" aria-hidden="true">
-          <FiSearch />
-        </span>
-        <input
-          ref={inputRef}
-          className="input"
-          type="search"
-          value={filters.search}
-          placeholder="Filter tasks…"
-          onChange={(event) => patch({ search: event.target.value })}
-          aria-label="Filter tasks"
-        />
-        {filters.search && (
-          <button type="button" className="icon-button" onClick={() => patch({ search: '' })} aria-label="Clear filter">
+      <div className="filter-bar__row">
+        <label className="search-field">
+          <span className="search-field__icon" aria-hidden="true">
+            <FiFilter />
+          </span>
+          <input
+            ref={searchRef}
+            className="input search-field__input"
+            value={filters.search}
+            onChange={(event) => patch({ search: event.target.value })}
+            placeholder="Search payee, notes or amount…"
+            aria-label="Search transactions"
+          />
+          <kbd className="search-field__kbd">/</kbd>
+        </label>
+
+        <label className="filter-field">
+          <span className="filter-field__label">From</span>
+          <input
+            className="input"
+            type="date"
+            value={filters.from}
+            onChange={(event) => patch({ from: event.target.value })}
+          />
+        </label>
+        <label className="filter-field">
+          <span className="filter-field__label">To</span>
+          <input
+            className="input"
+            type="date"
+            value={filters.to}
+            onChange={(event) => patch({ to: event.target.value })}
+          />
+        </label>
+
+        {showAccountFilter && (
+          <label className="filter-field">
+            <span className="filter-field__label">Account</span>
+            <select
+              className="input"
+              value={filters.accountId}
+              onChange={(event) => patch({ accountId: event.target.value })}
+            >
+              <option value="all">All accounts</option>
+              {accounts
+                .filter((account) => !account.archived)
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+
+        <label className="filter-field">
+          <span className="filter-field__label">Category</span>
+          <select
+            className="input"
+            value={filters.categoryId}
+            onChange={(event) => patch({ categoryId: event.target.value })}
+          >
+            <option value="all">All categories</option>
+            <option value="uncategorized">Uncategorized</option>
+            {categories
+              .filter((category) => !category.archived)
+              .map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+          </select>
+        </label>
+
+        <label className="filter-field">
+          <span className="filter-field__label">Tag</span>
+          <select className="input" value={filters.tag} onChange={(event) => patch({ tag: event.target.value })}>
+            <option value="">All tags</option>
+            {tags.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="filter-field">
+          <span className="filter-field__label">Status</span>
+          <select
+            className="input"
+            value={filters.cleared}
+            onChange={(event) =>
+              patch({ cleared: event.target.value as LedgerFilters['cleared'] })
+            }
+          >
+            <option value="all">All</option>
+            <option value="cleared">Cleared</option>
+            <option value="uncleared">Uncleared</option>
+          </select>
+        </label>
+
+        <label className="filter-field">
+          <span className="filter-field__label">Sort</span>
+          <select
+            className="input"
+            value={filters.sort}
+            onChange={(event) => patch({ sort: event.target.value as LedgerSort })}
+          >
+            {SORT_LABELS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {hasFilters && (
+          <button
+            type="button"
+            className="button button--ghost filter-bar__clear"
+            onClick={() => {
+              const { search, ...rest } = filters;
+              onChange({
+                ...rest,
+                search: '',
+                from: '',
+                to: '',
+                categoryId: 'all',
+                accountId: 'all',
+                tag: '',
+                cleared: 'all',
+                sort: 'date-desc',
+              });
+              if (search) searchRef.current?.focus();
+            }}
+          >
             <FiX aria-hidden="true" />
+            Clear
           </button>
         )}
       </div>
-
-      <label className="filter-bar__control">
-        <span className="sr-only">Group by</span>
-        <select
-          className="input"
-          value={filters.groupBy}
-          onChange={(event) => patch({ groupBy: event.target.value as GroupKey })}
-        >
-          <option value="day">Group: Date</option>
-          <option value="project">Group: Project</option>
-          <option value="priority">Group: Priority</option>
-          <option value="place">Group: Place</option>
-          <option value="lane">Group: Lane</option>
-          <option value="none">Group: None</option>
-        </select>
-      </label>
-
-      <label className="filter-bar__control">
-        <span className="sr-only">Sort by</span>
-        <select className="input" value={filters.sort} onChange={(event) => patch({ sort: event.target.value as SortKey })}>
-          <option value="date">Sort: Due date</option>
-          <option value="priority">Sort: Priority</option>
-          <option value="created">Sort: Created</option>
-          <option value="alpha">Sort: A → Z</option>
-          <option value="manual">Sort: Manual</option>
-        </select>
-      </label>
-
-      <label className="filter-bar__control">
-        <span className="sr-only">Priority</span>
-        <select
-          className="input"
-          value={String(filters.priority)}
-          onChange={(event) =>
-            patch({ priority: event.target.value === 'all' ? 'all' : (Number(event.target.value) as Priority) })
-          }
-        >
-          <option value="all">All priorities</option>
-          <option value="1">P1 only</option>
-          <option value="2">P2 only</option>
-          <option value="3">P3 only</option>
-          <option value="4">P4 only</option>
-        </select>
-      </label>
-
-      <label className="filter-bar__toggle">
-        <input
-          type="checkbox"
-          checked={filters.showCompleted}
-          onChange={(event) => patch({ showCompleted: event.target.checked })}
-        />
-        <span>Done</span>
-      </label>
-
-      <span className="filter-bar__count">{resultCount}</span>
     </div>
   );
 }

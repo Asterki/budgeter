@@ -1,5 +1,5 @@
 /**
- * Date + time helpers for the Tasker domain.
+ * Date + time helpers for the Budget domain.
  *
  * The app treats a task date as a calendar day (`YYYY-MM-DD`) and a task time as
  * a wall-clock string (`HH:mm`). Everything here works in the user's local time

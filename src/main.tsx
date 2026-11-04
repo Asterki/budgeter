@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { TaskerProvider } from './state/store';
+import { BudgetProvider } from './state/store';
 import { registerServiceWorker } from './pwa/serviceWorker';
 import './styles.css';
 
@@ -10,9 +10,9 @@ if (!container) throw new Error('Root element #root was not found.');
 
 createRoot(container).render(
   <StrictMode>
-    <TaskerProvider>
+    <BudgetProvider>
       <App />
-    </TaskerProvider>
+    </BudgetProvider>
   </StrictMode>,
 );
 

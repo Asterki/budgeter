@@ -1,29 +1,26 @@
-# Tasker — User Manual
+# Budget — User Manual
 
-Tasker is a local-first todo and planning app. Everything you create lives on
-your device in IndexedDB; there is no account and no login. The app works with
-no network at all. If you turn on optional sync, Tasker talks only to the relay
-you configure, and only with encrypted payloads.
+Budget is a single-user, local-first personal budgeting app. Everything you enter
+is stored in your browser's IndexedDB on this device. There is no account, no
+login and no cloud copy unless you choose to connect the optional encrypted sync
+relay.
+
+Money is stored in integer minor units (cents) and formatted for display with
+your chosen currency and locale.
 
 ---
 
-## 1. Structure
+## 1. First run
 
-Tasker organises work in four levels:
+1. Open the app. The ledger starts empty.
+2. Open **Settings** (the gear in the header, or tab `6`) and add at least one
+   account under **Accounts**, with its opening balance.
+3. Optionally set your **Currency** (ISO code such as `USD`, `EUR`, `GBP`) and
+   **Locale** (for example `en-US`, `de-DE`) under **Appearance**.
+4. Return to **Ledger** and record your first transaction with the composer or
+   the **Add transaction** button.
 
-```
-Category        Work, Personal, …            ← groups projects
-  └ Project     Student management system     ← groups tasks, owns tags
-      └ Task    Draft the proposal
-          └ Subtask  Collect requirements     ← nests forever
-```
-
-- **Categories** are the top level, created from the rail or in Settings.
-- **Projects** belong to a category and own their own tag set.
-- **Tasks** belong to a project (or the Inbox) and can carry priorities, places,
-  dates, times, tags and recurrence.
-- **Subtasks** are ordinary tasks with a parent, so they support *exactly* the
-  same metadata and nest to any depth.
+Settings, categories and the theme are saved immediately as you change them.
 
 ---
 
@@ -31,321 +28,294 @@ Category        Work, Personal, …            ← groups projects
 
 ### Desktop
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ [ Search tasks ]                   ( 3 ) ↑4 ⚡2× ✓7   ☾ ?  + Add task │
-├───────────────┬──────────────────────────────────────────────────────────┤
-│ Scheduled     │                                                          │
-│ Today         │                     Active view                          │
-│ Inbox         │          Tasks · Calendar · Roadmap · Settings           │
-│ All tasks     │                                                          │
-│ Completed     │                                                          │
-│ ───────────   │                                                          │
-│ CATEGORIES +  │                                                          │
-│  ▾ ● Work     │                                                          │
-│     ● Tasker  │  ← thin progress bar under each project                  │
-│     + Project │                                                          │
-│  ▾ ● Personal │                                                          │
-│ ───────────   │                                                          │
-│ PLACES        │                                                          │
-│  @desk @home  │                                                          │
-├───────────────┴──────────────────────────────────────────────────────────┤
-│ Settings   User manual              ● Local-first · Offline ready        │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+- **Top bar** — net worth, one balance per active account, the balance-visibility
+  eye, progress HUD, search, theme toggle, Settings and **Add transaction**.
+- **Left rail** — Ledger scopes (All, Uncategorized), accounts, category groups,
+  payee search, and the Settings link.
+- **Workspace** — the selected view.
+- **Detail overlay** — transaction editor and dialogs open over the workspace.
 
-The global menu bar spans the top edge with search on the left and utility
-actions on the right. The left rail holds navigation. Clicking a task opens the
-detail panel on the right.
+### Mobile (up to 860 px)
 
-The badge in the top bar is your **progress HUD**: level ring, streak, current
-combo and how many you have finished today. Click it for the full breakdown.
-
-### Mobile
-
-The bottom tab bar holds **Tasks**, **Calendar**, **Roadmap** and **More**. A
-floating **+** sits in the thumb zone. Creating and editing happen in a **bottom
-sheet**: drag the handle down — or swipe the sheet away — to close it.
+- A bottom tab bar switches between Ledger, Budget, Calendar, Reports, Forecast
+  and Settings.
+- The left rail is replaced by a scope selector at the top of the ledger.
+- Creation and detail dialogs slide up as thumb-zone bottom sheets. Drag the
+  handle down, tap the backdrop or press `Esc` to close.
 
 ---
 
-## 3. Views
+## 3. Views and shortcuts
 
-### Scheduled (the landing view)
-
-Every task that has a date, grouped by the day it sits on and sorted
-chronologically. Overdue days sort to the top, then today, tomorrow, and out into
-the future. Undated work stays in the Inbox or inside its project.
-
-The quick-add field is focused automatically on desktop, so you can open Tasker
-and start typing immediately.
-
-### Tasks
-
-One list, scoped by whatever you picked in the rail (a category, a project, a
-place, or a smart list). Use it to sort, filter and manipulate tasks.
-
-- **Debounced live filter** — typing narrows the list after a short pause.
-- **Group** — by date, project, priority, place or roadmap lane.
-- **Sort** — by due date, priority, creation date, alphabetically, or manual.
-- **Priority flag** — click the flag on a row to cycle P1 → P2 → P3 → P4.
-- **Subtask expander** — rows with children show `2/3`; click it to nest them
-  inline. The `＋` button on a row adds a subtask without opening anything.
-
-### Calendar
-
-An interactive month/week grid. A **multi-day task appears on every day it
-spans**; continuation days are dashed and italic so the start is obvious. Select
-a day to inspect it; the day panel below offers a quick-add pre-dated to that day.
-
-### Roadmap
-
-A timeline of execution sequences. Top-level tasks are grouped into **lanes**
-(set the lane in the detail panel) and plotted week-by-week, or day-by-day with
-the **Days** toggle. Bars are coloured by priority and turn red when overdue.
-Subtasks stay with their parent instead of cluttering the timeline. Unscheduled
-work sits in the backlog below.
-
----
-
-## 4. Natural-language quick add
-
-Type a normal sentence and Tasker extracts the metadata as you type — the chips
-under the input always show exactly what will be saved.
-
-```
-Create a new feature in the app @work tomorrow !1 #UNAH
-```
-
-| Result | Value |
+| Key | View |
 | --- | --- |
-| Title | Create a new feature in the app |
-| Place | `work` |
-| Date | tomorrow's date |
-| Priority | 1 |
-| Project | UNAH |
+| `1` | Ledger (transactions) |
+| `2` | Budget |
+| `3` | Calendar |
+| `4` | Reports |
+| `5` | Forecast |
+| `6` | Settings |
 
-**Press `Enter` to send.** `Esc` clears the field.
+Other shortcuts: `n` focuses quick add, `/` focuses ledger search, `Esc` closes
+the open dialog or sheet. Shortcuts are ignored while typing in a field.
 
-### Tokens
+---
 
-| Token | Meaning | Examples |
+## 4. Ledger
+
+- Transactions are grouped by date with a daily net total.
+- Scoped to one account, each row also shows the running balance after that
+  transaction.
+- **Search** matches payee, notes, tags, and the formatted or plain amount.
+- **Filters** cover date range, category (including Uncategorized), account, tag
+  and cleared state; sorting supports newest, oldest, largest and smallest.
+- **CSV** exports exactly what the current scope and filters show.
+- The **Upcoming** section lists scheduled rows for the next 30 days in a dimmed
+  style. They are projections, not ledger entries.
+- Long histories load 200 rows at a time; use **Load more**.
+
+### Adding a transaction
+
+Choose **Expense**, **Income** or **Transfer**.
+
+- Expenses are negative, income is positive, transfers move money between two
+  accounts and create two linked rows.
+- Amount is entered in normal units (`12.50`); it is stored as `1250` cents.
+- Pick an account, an optional category, a payee (autocomplete reuses existing
+  payees case-insensitively), a date, optional comma-separated tags, notes and
+  the cleared flag.
+- **Repeat this transaction** turns it into a recurring rule.
+- Deleting a transaction removes that row; deleting a transfer removes both legs.
+
+### Cleared and reconciliation
+
+Marking a transaction cleared is reconciliation. Clearing an already-cleared row
+again does not pay XP twice.
+
+---
+
+## 5. Quick add syntax
+
+One line creates one transaction. The amount is required; everything else is
+optional. Unknown payees and categories are shown as “new” chips and created
+when you submit. An unknown `^account` is an error — accounts are never created
+silently.
+
+| Token | Meaning | Example |
 | --- | --- | --- |
-| `@place` | Physical or contextual place | `@work` `@home` `@downtown` |
-| `!1` … `!4` | Priority (1 = urgent, 4 = none) | `!1` `!p2` |
-| `#Project` | Project (created automatically if new) | `#UNAH` `#Deep Work` |
-| `^Category` | Category (created if new) | `^Work` `^Personal` |
-| `+tag` | Tag from the target project | `+design` `+urgent` |
+| amount | Required. `+` means income, otherwise expense | `4.50`, `+2500`, `$18`, `1.234,56` |
+| `@name` | Payee | `@Starbucks` |
+| `#name` | Category | `#Food` |
+| `^name` | Account (must already exist) | `^Checking` |
+| `+tag` | Tag | `+work` |
+| `!cleared` | Mark cleared | `!cleared` |
 
-A token must be preceded by a space (or start the line), so email addresses and
-words like `C#` are never mistaken for tokens. The dropdown inserts the space for
-you.
+Examples:
 
-### Dates
+```text
+coffee 4.50 @Starbucks #Food
+salary +2500 ^Checking friday
+rent 1200 monthly on the 1st #Housing
+transfer 300 from Checking to Savings
+300 -> Savings
+lunch 12,5 yesterday
+taxi $18 2d ago
+groceries 84.20 last monday
+```
 
-`today`, `tomorrow`, `tonight`, `mon` … `sun`, `monday` … `sunday`,
-`next friday`, `this monday`, `next week`, `next month`, `in 3 days`,
-`in 2 weeks`, `25/10`, `10/25/2027`, `2027-01-09`, `Oct 25`, `25 Oct`,
-`Oct 25 2027`.
+Dates understood: `today`, `tomorrow`, `yesterday`, `tonight`, weekdays
+(`friday`, `next monday`, `last tuesday`), `in 3 days`, `2 weeks ago`, ISO
+`2026-11-03`, `11/3`, `Nov 3`, and `on the 1st` for monthly rules.
 
-### Times, durations and multi-day spans
+Recurrence: `daily`, `weekly`, `monthly`, `yearly`, `every 2 weeks`,
+`every monday`, `monthly on the 1st`. Future occurrences are planned, not stored.
 
-`3pm`, `3:30pm`, `15:00`, `at 7`, `noon`, `morning`, `evening`.
+The remaining words become notes. A known payee with a default category
+pre-fills it, and a categorization rule can fill a missing category.
 
-- **Start and end time:** `9-11am`, `from 9 to 11am`, `at 3pm to 5pm`.
-- **Start and end date:** `tomorrow until monday`, `Oct 24 through Oct 30`.
+---
 
-A date with no time is an **all-day** event. Adding a time turns it into a
-micro-scheduled timeframe with an optional finish time.
+## 6. Accounts, categories and rules
 
-### Recurrence
+- **Accounts** have a name, type (checking, savings, cash, credit, investment),
+  colour, opening balance and archived flag. Archive hides an account from
+  pickers without deleting history.
+- **Category groups** are envelopes such as Living or Fun. Categories are
+  expense or income, belong to at most one group, and can be archived.
+- Deleting a category reassigns its transactions to a category you choose (or
+  Uncategorized) and removes its budgets.
+- **Categorization rules** in Settings match contains-text against payee and
+  notes and assign a category. They run in quick add and CSV import. Explicit
+  `#category` always wins.
 
-`every day`, `every 2 weeks`, `every monday`, `every month`, `every 1st`,
-`every year`, `daily`, `weekly`, `monthly`, `yearly`.
+---
 
-### Autocomplete dropdowns
+## 7. Budgets
 
-Start a token and a list of what already exists appears — arrow keys to move,
-`Tab` or `Enter` to accept (or click it):
+- Pick a month with the arrows, or click the month name to return to today.
+- Each expense category has an editable limit. Changes save on blur or `Enter`;
+  `Esc` reverts the field.
+- **Rollover** carries the previous month's leftover — or overspend — into the
+  month.
+- Bars are green below 80%, amber from 80%, and red with an “over by” amount when
+  spending exceeds the available limit.
+- **Copy last month's budgets** copies limits for matching categories.
+- **Set all from 3-month average** seeds limits from previous full months.
+- Clicking a category opens the ledger filtered to that category and month.
+- The summary shows income, spending, savings rate, budgeted, spent, left and
+  unbudgeted spending.
 
-| Trigger | Suggests |
+---
+
+## 8. Scheduled and recurring
+
+Create a rule from quick add (`rent 1200 monthly on the 1st`), from the
+transaction editor's **Repeat** section, or manage existing rules under
+**Settings → Recurring**.
+
+- Rules store the next date and the last generated date.
+- When the app opens or the tab becomes visible, every due occurrence up to today
+  is generated, capped at 366 per rule, with deterministic ids so reloads and
+  sync cannot create duplicates.
+- Future occurrences are never stored. They appear as planned rows in the ledger
+  (next 30 days) and feed the Forecast.
+- **Pause** stops generation; **Resume** catches up immediately.
+- **Skip next** moves the rule forward without creating a row.
+- Deleting offers **Delete rule only** (keeps generated rows) or **Delete rule +
+  rows** (removes rows dated today or later).
+- Recurring transfers are not supported.
+
+---
+
+## 9. Calendar, forecast and reports
+
+**Calendar** — a Monday-first month grid with each day's net spend, filled dots
+for actual transactions and outlined dots for planned ones. Select a day to see
+its net, quick-add on that date, and open its rows.
+
+**Forecast** — projected total balance for the next 60 or 90 days from current
+balances plus planned recurring items. Negative days are flagged, with per-account
+today, end and low values.
+
+**Reports** — month, quarter, year or a custom range, with previous-period
+comparison. Includes a category donut, spending over time, income vs expense, net
+worth over time, top payees and category trend. Every chart has a table fallback.
+
+---
+
+## 10. CSV import and export
+
+### Import
+
+1. **Settings → Data → Import CSV**, or the ledger's import entry.
+2. Choose a `.csv` file, the target account and the date format.
+3. Confirm the column mapping: date, amount (or separate debit/credit), payee,
+   notes, category. Mapping is guessed from common header names.
+4. Review the preview. Rows matching an existing transaction on the same account,
+   date, amount and payee are marked **Duplicate** and skipped by default.
+5. Categories are resolved from the CSV category name, then the payee's default,
+   then categorization rules. Missing payees are created.
+
+Amounts with either decimal separator are accepted. Invalid or zero-amount rows
+are skipped. Imported rows do not award XP.
+
+### Export
+
+The ledger's **CSV** button exports the current filtered rows with date, account,
+amount, type, category, payee, notes, tags and cleared state.
+
+---
+
+## 11. Backup and restore
+
+- **Settings → Data → Export JSON** downloads a complete version 5 backup:
+  accounts, categories, groups, payees, categorization rules, transactions,
+  budgets, recurring rules and settings/progress.
+- **Import JSON** validates the file, replaces all current data and reloads the
+  app. It is refused while sync is connected — disconnect first.
+- **Reset app** erases local data and disconnects sync.
+
+CSV is for moving transactions; JSON is the full backup.
+
+---
+
+## 12. Privacy
+
+**Appearance → Hide balances** (or the eye in the header) masks every amount in
+the header, ledger, running balances, account lists and summaries. The underlying
+data is unchanged. The setting syncs with your other devices.
+
+---
+
+## 13. Sync between devices (optional)
+
+Run the relay from `server/` (see README) or use your own deployment.
+
+1. On the first device: **Settings → Sync**, enter the relay URL and a passphrase
+   of at least eight characters, then **Create space**.
+2. On the second device: enter the same URL and passphrase, then **Connect**.
+   The fingerprint should match on both devices.
+3. Changes sync every 20 seconds, on focus and when the connection returns.
+4. **Disconnect** keeps local data and stops syncing.
+
+Encryption keys are derived from the passphrase (PBKDF2 + HKDF, AES-GCM). The
+relay stores encrypted payloads and never sees the passphrase. There is no
+password recovery: losing the passphrase means the space cannot be reopened.
+
+Sync uses protocol 2 and schema 6. Old Tasker spaces are refused, importing JSON
+is refused while connected, and transfer deletions propagate as a pair.
+
+---
+
+## 14. Install and offline use
+
+- **Install** from the browser's address bar or menu (Chrome/Edge) or
+  Share → Add to Home Screen (Safari).
+- The service worker caches the app shell and build assets, so a reload works
+  offline.
+- If a new build is deployed, reload once to pick it up; the cache is
+  version-stamped per build.
+- The manifest adds an **Add transaction** shortcut which opens the new
+  transaction form directly.
+
+---
+
+## 15. Progress and achievements
+
+- Logging a transaction earns XP (`5 × combo`, combo capped at 5, plus a small
+  streak bonus). Logs within eight seconds build a combo.
+- Reconciling (clearing) a transaction earns XP once per row.
+- Closed months are evaluated once: under budget, budget master, zero-based and a
+  savings rate of at least 20% each award XP.
+- Streak = consecutive days with at least one logged transaction.
+- 18 achievements cover entry counts, streaks, budgeting, savings, no-spend days,
+  reconciliation, debt-free accounts and the emergency-fund target.
+- Transfers and generated recurring rows do not earn XP. Re-adding or duplicating
+  a transaction cannot farm XP.
+- The header HUD shows level and streak; **Settings → Progress** lists everything.
+
+---
+
+## 16. Troubleshooting
+
+| Problem | What to do |
 | --- | --- |
-| `#` | projects, **grouped by category** |
-| `^` | categories |
-| `@` | places |
-| `!` | priorities 1–4 |
-| `+` | tags, scoped to the project you already typed |
-
-While the list is open, `Enter` still sends the task unless you have moved into
-the list with the arrow keys.
-
----
-
-## 5. Progress and rewards
-
-Finishing something should feel like finishing something.
-
-- **XP** — every tick scores XP by priority: P1 12, P2 8, P3 5, P4 3.
-- **Combo** — complete tasks within 8 seconds of each other and the multiplier
-  climbs ×2, ×3 … up to ×5. The HUD shows the live combo while it is running.
-- **Checklist bonus** — ticking the last open subtask of a parent adds 6 XP and
-  fires its own green burst.
-- **Levels** — 100 XP for level 2, 200 more for level 3, and so on. The ring in
-  the top bar fills as you go and a toast announces each level.
-- **Streak** — consecutive days with at least one completion, with your best
-  streak kept forever. The current streak resets only after a full day is skipped.
-- **Achievements** — twelve of them, from *First step* to *Veteran*, listed in the
-  HUD and in Settings. Unlocking one raises a toast.
-- **Daily milestones** — 1, 3, 5, 10 and 20 completions in a day get a shout.
-- **Haptics** — supported devices buzz on completion, with a distinct pattern for
-  a level-up or a cleared checklist. Toggle it in the HUD or Settings.
-- **Sound** — an optional short chime, a richer arpeggio for level-ups. Off by
-  default; toggle it with the speaker icon in the HUD.
-- **Undo** — every completion raises an *Undo* pill at the bottom of the screen
-  for six seconds. Undoing restores the task (and its subtasks) and takes the XP
-  back, so a mis-tap costs nothing.
-
-All of this respects `prefers-reduced-motion` — with it enabled the particles are
-skipped and only the XP label and toasts remain.
+| Amount is rejected | Include a number such as `4.50`; use `+` for income. Only one amount per line. |
+| `^Account` is rejected | Create the account in Settings first. Accounts are never auto-created. |
+| CSV rows are missing | Check the date format and mapping; invalid dates and zero amounts are skipped. |
+| CSV rows are marked duplicate | Same account, date, amount and payee already exists. Uncheck the skip option to import anyway. |
+| Import JSON is refused | Disconnect sync first. |
+| Balances show dots | Turn off Hide balances in Settings or with the eye button. |
+| Scheduled rows did not appear | Open the app (or the tab) again; catch-up runs on boot/visibility. Check that the rule is active and its next date is not in the future. |
+| Sync shows an incompatible-protocol error | The relay is an older Tasker/Budget protocol. Update the relay image. |
+| Nothing appears after reload | Confirm the browser allows IndexedDB for this origin and that you are on the same profile/device. |
 
 ---
 
-## 6. Keyboard shortcuts
+## 17. Where data lives
 
-| Keys | Action |
-| --- | --- |
-| `n` | Focus the quick-add field |
-| `/` or `⌘/Ctrl + K` | Focus the filter / search field |
-| `1` | Scheduled view |
-| `2` | Calendar view |
-| `3` | Roadmap view |
-| `4` | Settings |
-| `t` | Jump to Today |
-| `?` | Open this manual |
-| `Esc` | Close the open panel, sheet, or dropdown |
-
-Shortcuts are disabled while you are typing in a field.
-
----
-
-## 7. Projects, tags and places
-
-- **Projects** are isolated containers with their own colour, tags and tasks.
-  Create one from the rail (**＋ New project**) or by typing `#Name`.
-- **Tags** belong to a project. Add them from the detail panel or the `+ tag`
-  button in a project view; attach or detach them with a click. Clicking a tag
-  chip in a project view filters the list to it.
-- **Places** are global contexts such as `@work`. They appear in the rail and can
-  be used as a grouping dimension.
-
-Manage a category or project with the `⋯` button next to it: rename, recolour,
-move a project between categories, or delete. Deleting a category keeps its
-projects; deleting a project moves its tasks to the Inbox.
-
----
-
-## 8. Subtasks
-
-Open a task and use **Subtasks → Add a subtask**, or press `＋` on any row. A
-subtask:
-
-- inherits its parent's project,
-- uses the same natural-language syntax as any other task,
-- can itself have subtasks, forever,
-- shows the parent's progress as `2/3` once you tick some off.
-
-Completing a parent completes its whole subtree. Deleting a parent deletes its
-subtree (you are asked first). Completing a **recurring** task moves its
-checklist onto the new occurrence and resets it, so a weekly routine keeps its
-steps.
-
----
-
-## 9. Recurrence
-
-Open a task and choose a repeat cycle. Simple cycles work out of the box; the
-custom controls add a multi-unit interval (`every 2 weeks`), explicit weekdays,
-a day of month, an end date, and a maximum number of occurrences.
-
-Completing a recurring task archives the current occurrence and creates the next
-one, so your history stays intact.
-
----
-
-## 10. Backup, restore and reset
-
-Everything lives in **Settings → Data**.
-
-- **Export JSON** downloads a complete snapshot: categories, projects, tags,
-  places, tasks (with subtasks and progress) and settings.
-- **Import JSON** restores that snapshot. Import *replaces* the current state, so
-  export first if you are unsure.
-- **Reset app** erases all local data. This cannot be undone.
-
-Keep the exported file somewhere safe — it is the only copy of your data.
-
----
-
-## 11. Sync between devices
-
-Sync is optional and off by default. Everything works without it. To turn it on,
-open **Settings → Sync**.
-
-1. Enter the **relay URL** (for example `https://tasker-api.asterki.xyz`).
-2. Enter a long **passphrase**. It is stretched in your browser and never sent to
-   the relay.
-3. Choose **Connect**. If that passphrase has no data yet, Tasker asks you to
-   confirm **Create new space**.
-4. On the second device, use the same relay URL and passphrase and choose
-   **Connect**. Both devices must show the same 8-character **Space**
-   fingerprint.
-
-There is no recovery: if you lose the passphrase, the sync space is gone.
-
-Once connected:
-
-- Every change is queued locally first. Tasker pushes the queue whenever it can
-  reach the relay and pulls new changes every 20 seconds while open, and right
-  away when the tab regains focus or the network returns.
-- Changes made offline are sent when the connection comes back.
-- Conflicts are settled per record by the most recent change. Tags on tasks and
-  projects are combined rather than discarded.
-- **Sync now** forces an immediate cycle; the card shows queued changes and the
-  last successful sync.
-- **Disconnect** stops syncing and clears the sync metadata. Your tasks stay.
-  Reconnecting merges this device with the remote space; where the same record
-  changed on both sides, the newest change wins.
-- XP, streaks and achievements sync with the rest of the space. Each device merges
-  the record it receives, so counters take the highest value and achievements are
-  unioned.
-
-Importing a JSON backup is blocked while sync is connected. Disconnect first.
-
----
-
-## 12. Offline behaviour
-
-- The app shell is cached by `sw.js`, so Tasker opens with no network.
-- All reads and writes go to IndexedDB and work offline.
-- If sync is connected, changes queue on the device and upload when the relay is
-  reachable again. Nothing is sent anywhere until you connect a sync space.
-
-### Installing the app (PWA)
-
-Use the browser's **Install** / **Add to Home Screen** action. Tasker then runs in
-its own window and works fully offline.
-
----
-
-## 13. Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| A `#project` or `^category` stayed in the task title | Put a space before the token — `release #Tasker`, not `release#Tasker`. |
-| The combo never builds | Completions must be within 8 seconds of each other. |
-| No vibration | Most desktops have no vibration motor; check the toggle in the HUD. |
-| App shows stale content | Hard-reload once; the service worker updates on the next visit. |
-| Sync says “Could not reach the sync server” | Check the relay URL and TLS certificate; the device must be online. |
-| Sync shows a different Space fingerprint | The passphrases differ. Use the same passphrase on both devices. |
-| Sync card asks to create a space | That passphrase has no data on the relay yet; confirm only if this is the first device. |
-| Lost data | Import your most recent JSON export. |
+- IndexedDB database `budget`, schema version 6.
+- Stores: accounts, categories, category groups, payees, transactions, budgets,
+  recurring rules, categorization rules, settings, plus sync outbox/versions/state.
+- No cookies, analytics or third-party requests. The only optional network
+  traffic is the sync relay you configure.

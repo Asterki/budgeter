@@ -1,14 +1,103 @@
 /**
- * Tasker domain model.
+ * Budget domain model.
  *
  * Everything the app knows about is described here. Records are stored verbatim
  * in IndexedDB, so these shapes double as the on-disk schema (see `src/db/database.ts`).
  *
- * Hierarchy:  Category  ->  Project  ->  Task  ->  Subtask (infinitely nested)
+ * Money is always stored as integer minor units (cents). Amounts on a
+ * transaction are signed: negative means money leaving the account.
  */
 
-/** Todoist-style priority: 1 is the most urgent, 4 is the default / none. */
-export type Priority = 1 | 2 | 3 | 4;
+export type AccountType = 'checking' | 'savings' | 'cash' | 'credit' | 'investment';
+
+export interface Account {
+  id: string;
+  name: string;
+  type: AccountType;
+  color: string;
+  /** Balance before any recorded transaction, in cents. */
+  openingBalance: number;
+  /** Optional per-account currency override; falls back to the app currency. */
+  currency?: string;
+  archived: boolean;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CategoryKind = 'expense' | 'income';
+
+/** A spending or income category. Groups are the top-level envelope. */
+export interface Category {
+  id: string;
+  name: string;
+  color: string;
+  kind: CategoryKind;
+  groupId: string | null;
+  order: number;
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Top-level grouping of categories, e.g. "Living costs", "Income". */
+export interface CategoryGroup {
+  id: string;
+  name: string;
+  order: number;
+}
+
+export interface Payee {
+  id: string;
+  name: string;
+  defaultCategoryId: string | null;
+  createdAt: number;
+}
+
+/** Contains-text rule that assigns a category when the entry has none. */
+export interface CategorizationRule {
+  id: string;
+  pattern: string;
+  categoryId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type TransactionType = 'expense' | 'income' | 'transfer';
+
+export interface Transaction {
+  id: string;
+  accountId: string;
+  /** Local calendar day, `YYYY-MM-DD`. */
+  date: string;
+  /** Signed cents; negative is an outflow. */
+  amount: number;
+  type: TransactionType;
+  categoryId: string | null;
+  payeeId: string | null;
+  /** Destination account for one half of a transfer. */
+  transferAccountId: string | null;
+  /** Shared by both halves of a transfer. */
+  transferPairId: string | null;
+  notes: string;
+  tags: string[];
+  cleared: boolean;
+  recurringId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Budget {
+  id: string;
+  categoryId: string;
+  /** Budget month, `YYYY-MM`. */
+  month: string;
+  /** Spending limit in cents. */
+  limit: number;
+  rollover: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -17,7 +106,7 @@ export interface RecurrenceRule {
   freq: RecurrenceFreq;
   /** Every N days / weeks / months / years. */
   interval: number;
-  /** For weekly rules: 0 (Sunday) – 6 (Saturday). Empty means "same weekday as the task". */
+  /** For weekly rules: 0 (Sunday) – 6 (Saturday). Empty means the start date's weekday. */
   byWeekday: number[];
   /** For monthly / yearly rules: explicit day-of-month numbers. */
   byMonthDay: number[];
@@ -27,108 +116,63 @@ export interface RecurrenceRule {
   count: number | null;
 }
 
-/** A top-level grouping of projects, e.g. "Work", "Personal". */
-export interface Category {
+/** Template for transactions that are generated on a schedule. */
+export interface RecurringRule {
   id: string;
-  name: string;
-  color: string;
-  order: number;
-  createdAt: number;
-}
-
-/** A tag belongs to exactly one project. */
-export interface Tag {
-  id: string;
-  name: string;
-  color: string;
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  color: string;
-  /** Owning category, or null for "Uncategorised". */
+  accountId: string;
+  amount: number;
+  type: TransactionType;
   categoryId: string | null;
-  tags: Tag[];
-  order: number;
-  createdAt: number;
-}
-
-/** A contextual or physical location, e.g. `@work`, `@home`, `@downtown`. */
-export interface Place {
-  id: string;
-  name: string;
-  createdAt: number;
-}
-
-export interface Task {
-  id: string;
-  title: string;
+  payeeId: string | null;
+  transferAccountId: string | null;
   notes: string;
-  projectId: string | null;
-
-  /**
-   * Parent task for subtasks. Subtasks are ordinary tasks, so nesting is
-   * unlimited and every subtask supports the full metadata set.
-   */
-  parentId: string | null;
-
-  place: string | null;
-  priority: Priority;
-
-  /** Start of the task as `YYYY-MM-DD`, or null for "someday". */
-  date: string | null;
-  /** Start time as `HH:mm` (24h). Null when all-day or unscheduled. */
-  time: string | null;
-  /**
-   * End of the task. Null (or equal to `date`) means the task finishes the same
-   * day it starts; a later date makes it a multi-day task.
-   */
-  endDate: string | null;
-  /** End time as `HH:mm`. Null when there is no explicit finish time. */
-  endTime: string | null;
-  /** True for day-level events, false for micro-scheduled timeframes. */
-  allDay: boolean;
-
-  /** Names of the project tags attached to this task. */
   tags: string[];
-  /** Groups tasks into an execution sequence on the roadmap. */
-  lane: string;
-  recurrence: RecurrenceRule | null;
-
-  completed: boolean;
-  completedAt: number | null;
-  /** Stable id shared by every occurrence generated from one recurring task. */
-  seriesId: string;
-
-  order: number;
+  cleared: boolean;
+  recurrence: RecurrenceRule;
+  /** Next date an occurrence should be generated for. */
+  nextDate: string;
+  lastGeneratedDate: string | null;
+  active: boolean;
   createdAt: number;
   updatedAt: number;
 }
 
 /**
- * Running totals for the completion loop. Kept as accumulated numbers rather
- * than derived from the task list so deleting old tasks never rewinds progress.
+ * Running totals kept for the progress panel. Stored rather than derived so
+ * deleting history never rewinds the user's level. Streaks count days with at
+ * least one logged transaction, and rewarded keys dedupe XP by transaction id.
  */
 export interface Progress {
   xp: number;
-  totalCompleted: number;
-  /** Consecutive days with at least one completion. */
+  /** Transactions logged by the user (generated rows are not counted twice). */
+  totalLogged: number;
+  /** Consecutive days with at least one logged transaction. */
   streak: number;
   bestStreak: number;
-  /** `YYYY-MM-DD` of the most recent completion. */
-  lastCompletionDate: string | null;
-  /** Completions on `todayDate`, used for milestone messages. */
+  /** `YYYY-MM-DD` of the most recent logged transaction. */
+  lastLogDate: string | null;
   todayCount: number;
   todayDate: string | null;
-  /** Most completions in a single day. */
-  bestDayCount: number;
-  /** Rapid-fire completion combo, and when the last link landed. */
+  /** Rapid-fire logging combo, and when the last link landed. */
   combo: number;
   bestCombo: number;
   lastComboAt: number | null;
-  /** How many parent checklists have been fully cleared. */
-  checklistsCleared: number;
+  /** Transactions marked cleared, used for the reconciliation badge. */
+  reconciled: number;
+  /** Closed months evaluated for budget achievements. */
+  evaluatedMonths: string[];
+  underBudgetMonths: number;
+  underBudgetStreak: number;
+  bestUnderBudgetStreak: number;
+  zeroBasedMonths: number;
+  budgetMasterMonths: number;
+  savingsMonths: number;
+  savingsStreak: number;
+  bestSavingsStreak: number;
+  noSpendDays: number;
+  noSpendWeekends: number;
+  /** Dedupe keys such as `tx:<id>` and `clear:<id>`. */
+  rewarded: string[];
   /** Unlocked achievement ids. */
   unlocked: string[];
   /** Epoch ms of the last progress mutation, used to order synced records. */
@@ -137,64 +181,77 @@ export interface Progress {
 
 export const EMPTY_PROGRESS: Progress = {
   xp: 0,
-  totalCompleted: 0,
+  totalLogged: 0,
   streak: 0,
   bestStreak: 0,
-  lastCompletionDate: null,
+  lastLogDate: null,
   todayCount: 0,
   todayDate: null,
-  bestDayCount: 0,
   combo: 0,
   bestCombo: 0,
   lastComboAt: null,
-  checklistsCleared: 0,
+  reconciled: 0,
+  evaluatedMonths: [],
+  underBudgetMonths: 0,
+  underBudgetStreak: 0,
+  bestUnderBudgetStreak: 0,
+  zeroBasedMonths: 0,
+  budgetMasterMonths: 0,
+  savingsMonths: 0,
+  savingsStreak: 0,
+  bestSavingsStreak: 0,
+  noSpendDays: 0,
+  noSpendWeekends: 0,
+  rewarded: [],
   unlocked: [],
   updatedAt: 0,
 };
 
 export interface Settings {
   /** Single key/value bag persisted in IndexedDB. */
-  theme: 'nordic-light' | 'nordic-dark';
-  defaultProjectId: string | null;
-  /** Gamification state driven by task completions. */
+  theme: 'light' | 'dark';
+  /** ISO 4217 code used for every displayed amount. */
+  currency: string;
+  /** BCP 47 locale passed to `Intl.NumberFormat`. */
+  locale: string;
+  /** Locale's first weekday (0 = Sunday … 6 = Saturday). */
+  firstDayOfWeek: number;
+  /** User override for the first day of the week. */
+  weekStartsOn: number;
+  /** Gamification state driven by transaction activity. */
   progress: Progress;
   /** Plays a short chime on completion. Off by default. */
   soundEnabled: boolean;
   /** Vibrates on completion where the device supports it. */
   hapticsEnabled: boolean;
+  /** Masks balances and headline totals until switched back off. */
+  hideBalances: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'nordic-dark',
-  defaultProjectId: null,
-  progress: {
-    xp: 0,
-    totalCompleted: 0,
-    streak: 0,
-    bestStreak: 0,
-    lastCompletionDate: null,
-    todayCount: 0,
-    todayDate: null,
-    bestDayCount: 0,
-    combo: 0,
-    bestCombo: 0,
-    lastComboAt: null,
-    checklistsCleared: 0,
-    unlocked: [],
-    updatedAt: 0,
-  },
+  theme: 'dark',
+  currency: 'USD',
+  locale: 'en-US',
+  firstDayOfWeek: 0,
+  weekStartsOn: 1,
+  progress: { ...EMPTY_PROGRESS },
   soundEnabled: false,
   hapticsEnabled: true,
+  hideBalances: false,
 };
 
 /** Shape of a full JSON backup produced by "Export". */
 export interface BackupFile {
-  app: 'tasker';
+  app: 'budget';
   version: number;
   exportedAt: string;
+  accounts: Account[];
   categories: Category[];
-  projects: Project[];
-  places: Place[];
-  tasks: Task[];
+  categoryGroups: CategoryGroup[];
+  payees: Payee[];
+  transactions: Transaction[];
+  budgets: Budget[];
+  recurring: RecurringRule[];
+  rules: CategorizationRule[];
   settings: Settings;
 }

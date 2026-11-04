@@ -1,147 +1,160 @@
 /**
- * Recurrence editor: simple cycles plus custom patterns
- * (multi-week intervals, weekday picks, day-of-month, end date, count).
+ * Recurrence pattern editor shared by the transaction form and recurring rules.
+ * It only edits the rule shape; scheduling lives in `src/domain/recurring.ts`.
  */
 
-import type { RecurrenceFreq, RecurrenceRule } from '../domain/types';
-import { FiRepeat } from 'react-icons/fi';
-import { WEEKDAYS_MIN, todayISO } from '../domain/date';
+import { useId } from 'react';
+
+import { WEEKDAYS_MIN } from '../domain/date';
 import { createRecurrence, describeRecurrence } from '../domain/recurrence';
+import type { RecurrenceFreq, RecurrenceRule } from '../domain/types';
 
 interface RecurrenceEditorProps {
-  value: RecurrenceRule | null;
-  dateISO: string | null;
-  onChange: (rule: RecurrenceRule | null) => void;
+  value: RecurrenceRule;
+  /** Date the pattern is anchored to, used for defaults when the frequency changes. */
+  startDate: string;
+  onChange: (rule: RecurrenceRule) => void;
 }
 
-export function RecurrenceEditor({ value, dateISO, onChange }: RecurrenceEditorProps) {
-  const anchor = dateISO ?? todayISO();
+const FREQUENCIES: { value: RecurrenceFreq; label: string }[] = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+];
 
-  function selectFreq(freq: string) {
-    if (!freq) {
-      onChange(null);
-      return;
-    }
-    const base = createRecurrence(freq as RecurrenceFreq, anchor);
-    onChange(value ? { ...value, freq: base.freq, byWeekday: base.byWeekday, byMonthDay: base.byMonthDay } : base);
-  }
+export function RecurrenceEditor({ value, startDate, onChange }: RecurrenceEditorProps) {
+  const dayId = useId();
+  const intervalId = useId();
+  const untilId = useId();
+  const countId = useId();
 
-  function patch(partial: Partial<RecurrenceRule>) {
-    if (!value) return;
-    onChange({ ...value, ...partial });
+  function changeFrequency(freq: RecurrenceFreq) {
+    const base = createRecurrence(freq, startDate);
+    onChange({
+      ...base,
+      interval: Math.max(1, value.interval),
+      until: value.until,
+      count: value.count,
+    });
   }
 
   function toggleWeekday(day: number) {
-    if (!value) return;
     const has = value.byWeekday.includes(day);
     const byWeekday = has
-      ? value.byWeekday.filter((d) => d !== day)
+      ? value.byWeekday.filter((item) => item !== day)
       : [...value.byWeekday, day].sort((a, b) => a - b);
-    patch({ byWeekday });
+    onChange({ ...value, byWeekday });
   }
 
   return (
     <div className="recurrence">
-      <label className="field">
-        <span className="field__label">Repeat</span>
-        <select
-          className="input"
-          value={value?.freq ?? ''}
-          onChange={(event) => selectFreq(event.target.value)}
-        >
-          <option value="">Does not repeat</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
-          <option value="yearly">Yearly</option>
-        </select>
-      </label>
+      <div className="field-row">
+        <label className="field">
+          <span className="field__label">Repeats</span>
+          <select
+            className="input"
+            value={value.freq}
+            onChange={(event) => changeFrequency(event.target.value as RecurrenceFreq)}
+          >
+            {FREQUENCIES.map((frequency) => (
+              <option key={frequency.value} value={frequency.value}>
+                {frequency.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field" htmlFor={intervalId}>
+          <span className="field__label">Every</span>
+          <input
+            id={intervalId}
+            className="input input--short"
+            type="number"
+            min={1}
+            max={99}
+            value={value.interval}
+            onChange={(event) =>
+              onChange({ ...value, interval: Math.max(1, Number(event.target.value) || 1) })
+            }
+            aria-label="Interval"
+          />
+        </label>
+      </div>
 
-      {value && (
-        <>
-          <div className="recurrence__row">
-            <label className="field field--inline">
-              <span className="field__label">Every</span>
-              <input
-                className="input input--num"
-                type="number"
-                min={1}
-                max={99}
-                value={value.interval}
-                onChange={(event) => patch({ interval: Math.max(1, Number(event.target.value) || 1) })}
-              />
-              <span className="field__suffix">
-                {value.freq === 'daily' && 'day(s)'}
-                {value.freq === 'weekly' && 'week(s)'}
-                {value.freq === 'monthly' && 'month(s)'}
-                {value.freq === 'yearly' && 'year(s)'}
-              </span>
-            </label>
+      {value.freq === 'weekly' && (
+        <fieldset className="weekday-picker">
+          <legend className="field__label">On days</legend>
+          <div className="weekday-picker__grid">
+            {WEEKDAYS_MIN.map((day, index) => (
+              <button
+                key={day}
+                type="button"
+                className={`weekday-picker__day${
+                  value.byWeekday.includes(index) ? ' weekday-picker__day--active' : ''
+                }`}
+                aria-pressed={value.byWeekday.includes(index)}
+                onClick={() => toggleWeekday(index)}
+              >
+                {day}
+              </button>
+            ))}
           </div>
-
-          {value.freq === 'weekly' && (
-            <div className="field">
-              <span className="field__label">On days</span>
-              <div className="weekday-picker">
-                {WEEKDAYS_MIN.map((label, index) => (
-                  <button
-                    key={`${label}-${index}`}
-                    type="button"
-                    className={`weekday${value.byWeekday.includes(index) ? ' weekday--active' : ''}`}
-                    onClick={() => toggleWeekday(index)}
-                    aria-pressed={value.byWeekday.includes(index)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
+          {value.byWeekday.length === 0 && (
+            <span className="field__hint">No days selected — the anchor date's weekday is used.</span>
           )}
-
-          {(value.freq === 'monthly' || value.freq === 'yearly') && (
-            <label className="field">
-              <span className="field__label">Day of month</span>
-              <input
-                className="input input--num"
-                type="number"
-                min={1}
-                max={31}
-                value={value.byMonthDay[0] ?? ''}
-                onChange={(event) => patch({ byMonthDay: [Number(event.target.value) || 1] })}
-              />
-            </label>
-          )}
-
-          <div className="recurrence__row">
-            <label className="field">
-              <span className="field__label">Until</span>
-              <input
-                className="input"
-                type="date"
-                value={value.until ?? ''}
-                onChange={(event) => patch({ until: event.target.value || null })}
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Max times</span>
-              <input
-                className="input input--num"
-                type="number"
-                min={1}
-                placeholder="∞"
-                value={value.count ?? ''}
-                onChange={(event) =>
-                  patch({ count: event.target.value ? Math.max(1, Number(event.target.value)) : null })
-                }
-              />
-            </label>
-          </div>
-
-          <p className="recurrence__summary">
-            <FiRepeat aria-hidden="true" /> {describeRecurrence(value)}
-          </p>
-        </>
+        </fieldset>
       )}
+
+      {(value.freq === 'monthly' || value.freq === 'yearly') && (
+        <label className="field" htmlFor={dayId}>
+          <span className="field__label">Day of month</span>
+          <input
+            id={dayId}
+            className="input input--short"
+            type="number"
+            min={1}
+            max={31}
+            value={value.byMonthDay[0] ?? ''}
+            onChange={(event) => {
+              const day = Math.min(31, Math.max(1, Number(event.target.value) || 1));
+              onChange({ ...value, byMonthDay: [day] });
+            }}
+          />
+        </label>
+      )}
+
+      <div className="field-row">
+        <label className="field" htmlFor={untilId}>
+          <span className="field__label">Until</span>
+          <input
+            id={untilId}
+            className="input"
+            type="date"
+            value={value.until ?? ''}
+            onChange={(event) => onChange({ ...value, until: event.target.value || null })}
+          />
+        </label>
+        <label className="field" htmlFor={countId}>
+          <span className="field__label">Max times</span>
+          <input
+            id={countId}
+            className="input input--short"
+            type="number"
+            min={1}
+            max={999}
+            value={value.count ?? ''}
+            placeholder="No limit"
+            onChange={(event) =>
+              onChange({
+                ...value,
+                count: event.target.value ? Math.max(1, Number(event.target.value)) : null,
+              })
+            }
+          />
+        </label>
+      </div>
+
+      <p className="recurrence__summary">{describeRecurrence(value)}</p>
     </div>
   );
 }

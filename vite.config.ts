@@ -13,7 +13,7 @@ const pkg = JSON.parse(
  */
 function serviceWorkerVersion(): Plugin {
   return {
-    name: 'tasker-sw-version',
+    name: 'budget-sw-version',
     apply: 'build',
     closeBundle() {
       const swPath = fileURLToPath(new URL('./dist/sw.js', import.meta.url));
@@ -28,7 +28,7 @@ function serviceWorkerVersion(): Plugin {
  * The build is fully self-describing: `mode` selects Vite's native `.env`
  * files, and the constants below are inlined into the bundle so the running
  * app can report exactly which build it is. No server-side configuration is
- * required — Tasker deploys as static files.
+ * required — Budget deploys as static files.
  */
 export default defineConfig(({ mode }) => ({
   plugins: [react(), serviceWorkerVersion()],

@@ -7,8 +7,14 @@
 
 import {
   clearOutboxForEntity,
-  normalizeProject,
-  normalizeTask,
+  normalizeAccount,
+  normalizeBudget,
+  normalizeCategory,
+  normalizeCategoryGroup,
+  normalizeCategoryRule,
+  normalizePayee,
+  normalizeRecurring,
+  normalizeTransaction,
   putOutbox,
   putVersion,
   setMutationListener,
@@ -17,15 +23,19 @@ import {
   type MutationEvent,
   type StoreName,
 } from '../db/database';
-import type { Project, Settings, Task } from '../domain/types';
+import type { Settings } from '../domain/types';
 import type { HlcClock } from './hlc';
 import type { SyncConfig } from './types';
 
 const KIND_BY_STORE: Record<StoreName, EntityKind> = {
-  tasks: 'task',
+  accounts: 'account',
   categories: 'category',
-  projects: 'project',
-  places: 'place',
+  categoryGroups: 'categoryGroup',
+  payees: 'payee',
+  transactions: 'transaction',
+  budgets: 'budget',
+  recurring: 'recurring',
+  rules: 'rule',
   settings: 'settings',
 };
 
@@ -44,15 +54,35 @@ export function entityPayload(kind: EntityKind, value: unknown): unknown {
     const settings = value as Settings;
     return {
       theme: settings.theme,
-      defaultProjectId: settings.defaultProjectId,
+      currency: settings.currency,
+      locale: settings.locale,
+      firstDayOfWeek: settings.firstDayOfWeek,
+      weekStartsOn: settings.weekStartsOn,
       soundEnabled: settings.soundEnabled,
       hapticsEnabled: settings.hapticsEnabled,
+      hideBalances: settings.hideBalances,
       progress: settings.progress,
     };
   }
-  if (kind === 'task') return normalizeTask(value as Task);
-  if (kind === 'project') return normalizeProject(value as Project);
-  return value;
+
+  switch (kind) {
+    case 'account':
+      return normalizeAccount(value as Parameters<typeof normalizeAccount>[0]);
+    case 'category':
+      return normalizeCategory(value as Parameters<typeof normalizeCategory>[0]);
+    case 'categoryGroup':
+      return normalizeCategoryGroup(value as Parameters<typeof normalizeCategoryGroup>[0]);
+    case 'payee':
+      return normalizePayee(value as Parameters<typeof normalizePayee>[0]);
+    case 'transaction':
+      return normalizeTransaction(value as Parameters<typeof normalizeTransaction>[0]);
+    case 'budget':
+      return normalizeBudget(value as Parameters<typeof normalizeBudget>[0]);
+    case 'recurring':
+      return normalizeRecurring(value as Parameters<typeof normalizeRecurring>[0]);
+    case 'rule':
+      return normalizeCategoryRule(value as Parameters<typeof normalizeCategoryRule>[0]);
+  }
 }
 
 async function persist(event: MutationEvent, hlc: string, active: SyncConfig): Promise<void> {

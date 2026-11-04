@@ -13,7 +13,7 @@ import { dirname, resolve } from 'node:path';
 
 const databasePath = process.env.DB_PATH
   ? resolve(process.env.DB_PATH)
-  : resolve(process.cwd(), 'data', 'tasker.db');
+  : resolve(process.cwd(), 'data', 'budget.db');
 
 mkdirSync(dirname(databasePath), { recursive: true });
 
@@ -98,7 +98,17 @@ export interface StoredEntity {
   payload: string;
 }
 
-export const ENTITY_TYPES = ['task', 'category', 'project', 'place', 'settings'] as const;
+export const ENTITY_TYPES = [
+  'account',
+  'category',
+  'categoryGroup',
+  'payee',
+  'transaction',
+  'budget',
+  'recurring',
+  'rule',
+  'settings',
+] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 const insertUser = db.prepare(

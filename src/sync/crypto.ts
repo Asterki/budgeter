@@ -7,7 +7,25 @@
 
 const encoder = new TextEncoder();
 const ITERATIONS = 600_000;
-const SALT = encoder.encode('tasker-sync-v1');
+
+/**
+ * Budget uses its own salt and HKDF labels. A passphrase reused from Tasker
+ * therefore maps to a completely different space, never a shared one.
+ */
+const CONTEXTS = {
+  budget: {
+    salt: 'budget-sync-v1',
+    authInfo: 'budget-auth',
+    encInfo: 'budget-enc',
+  },
+  tasker: {
+    salt: 'tasker-sync-v1',
+    authInfo: 'tasker-auth',
+    encInfo: 'tasker-enc',
+  },
+} as const;
+
+export type SyncKeyContext = keyof typeof CONTEXTS;
 
 export interface SyncKeys {
   authKey: string;
@@ -31,14 +49,18 @@ function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-export async function deriveKeys(passphrase: string): Promise<SyncKeys> {
+export async function deriveKeys(
+  passphrase: string,
+  context: SyncKeyContext = 'budget',
+): Promise<SyncKeys> {
   const normalized = passphrase.normalize('NFKC');
+  const labels = CONTEXTS[context];
   const base = await crypto.subtle.importKey('raw', encoder.encode(normalized), 'PBKDF2', false, [
     'deriveBits',
   ]);
 
   const masterBits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: SALT, iterations: ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: encoder.encode(labels.salt), iterations: ITERATIONS, hash: 'SHA-256' },
     base,
     256,
   );
@@ -46,13 +68,13 @@ export async function deriveKeys(passphrase: string): Promise<SyncKeys> {
   const hkdf = await crypto.subtle.importKey('raw', masterBits, 'HKDF', false, ['deriveBits', 'deriveKey']);
 
   const authBits = await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode('tasker-auth') },
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode(labels.authInfo) },
     hkdf,
     256,
   );
 
   const encKey = await crypto.subtle.deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode('tasker-enc') },
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode(labels.encInfo) },
     hkdf,
     { name: 'AES-GCM', length: 256 },
     false,

@@ -1,575 +1,812 @@
 /**
- * Inline natural-language parser (Todoist style).
+ * Natural-language transaction parser.
  *
- * Runs on every keystroke over the quick-add field and extracts structured
- * metadata from free text, leaving a clean title behind.
- *
- *   "Create a new feature in the app @work tomorrow !1 #UNAH"
- *     -> title  "Create a new feature in the app"
- *        place  "work"
- *        date   2026-10-23 (the next calendar day)
- *        priority 1
- *        project "UNAH"
- *
- * Recognised tokens
- *   @place        contextual / physical place
- *   !1 … !4       priority (1 highest, 4 default)
- *   #Project      project (created on save when it does not exist yet)
- *   ^Category     category (created on save when it does not exist yet)
- *   +tag          tag from the target project
- *   dates         today, tomorrow, tonight, fri, next monday, in 3 days,
- *                 25/10, 2026-10-25, Oct 25, 25 Oct
- *   times         3pm, 3:30pm, 15:00, at 7, noon, evening
- *   ranges        9-11am, from 9 to 11am  (sets a start and an end time)
- *   spans         until friday, until 2026-11-02  (multi-day tasks)
- *   recurrence    every day, every 2 weeks, every monday, every month,
- *                 every 1st, daily / weekly / monthly / yearly
+ * One line such as `coffee 4.50 @Starbucks #Food` becomes a complete draft:
+ * signed amount, type, account, category, payee, tags, date and recurrence.
+ * Unknown payees and categories are reported so the UI can offer a
+ * confirmation chip; an unknown account is an error because silently creating
+ * accounts would make balances unpredictable.
  */
 
-import type { Category, Place, Priority, Project, RecurrenceFreq, RecurrenceRule } from './types';
-import { nextOccurrence } from './recurrence';
 import {
+  MONTHS,
   addDays,
   addMonths,
+  addYears,
+  formatDate,
   fromISODate,
   isValidISODate,
-  MONTHS,
-  parseTimeToken,
-  timeToMinutes,
   todayISO,
-  WEEKDAYS_SHORT,
+  weekdayOf,
 } from './date';
+import { formatMoney, parseAmount } from './money';
+import { describeRecurrence } from './recurrence';
+import type {
+  Account,
+  Category,
+  Payee,
+  RecurrenceFreq,
+  RecurrenceRule,
+} from './types';
+
+export interface ParseContext {
+  accounts: Account[];
+  categories: Category[];
+  payees: Payee[];
+  /** Account used when the line does not mention one. */
+  defaultAccountId?: string | null;
+  currency: string;
+  locale: string;
+  /** Injectable clock, `YYYY-MM-DD`. Defaults to today. */
+  today?: string;
+}
+
+export type ParsedTransactionType = 'expense' | 'income' | 'transfer';
 
 export type ParsedTokenKind =
-  | 'project'
+  | 'amount'
+  | 'payee'
   | 'category'
-  | 'place'
-  | 'priority'
+  | 'account'
+  | 'tag'
+  | 'cleared'
   | 'date'
-  | 'endDate'
-  | 'time'
-  | 'endTime'
   | 'recurrence'
-  | 'tag';
+  | 'transfer';
 
 export interface ParsedToken {
   kind: ParsedTokenKind;
-  raw: string;
   label: string;
+  raw: string;
+  /** `new` marks an entity that will be created on submit. */
+  status?: 'known' | 'new' | 'default' | 'error';
 }
 
-export interface ParsedInput {
-  title: string;
-  projectId: string | null;
-  projectName: string | null;
+export interface ParseError {
+  code: 'amount-missing' | 'amount-ambiguous' | 'account-unknown' | 'account-missing' | 'transfer-incomplete' | 'transfer-same' | 'recurring-transfer';
+  message: string;
+}
+
+export interface ParsedTransaction {
+  type: ParsedTransactionType;
+  /** Positive magnitude in cents, or null when no amount was found. */
+  amount: number | null;
+  date: string;
+  accountId: string | null;
+  accountName: string | null;
+  transferAccountId: string | null;
+  transferAccountName: string | null;
   categoryId: string | null;
   categoryName: string | null;
-  place: string | null;
-  priority: Priority;
-  date: string | null;
-  time: string | null;
-  endDate: string | null;
-  endTime: string | null;
-  allDay: boolean;
-  recurrence: RecurrenceRule | null;
+  isNewCategory: boolean;
+  payeeId: string | null;
+  payeeName: string | null;
+  isNewPayee: boolean;
   tags: string[];
+  cleared: boolean;
+  recurrence: RecurrenceRule | null;
+  notes: string;
   tokens: ParsedToken[];
+  errors: ParseError[];
+  valid: boolean;
 }
 
-export interface ParseContext {
-  categories: Category[];
-  projects: Project[];
-  places: Place[];
-  /** Used when the text contains no `#project` token. */
-  fallbackProjectId?: string | null;
+const WEEKDAY_LOOKUP = new Map<string, number>([
+  ['sunday', 0],
+  ['sun', 0],
+  ['monday', 1],
+  ['mon', 1],
+  ['tuesday', 2],
+  ['tue', 2],
+  ['tues', 2],
+  ['wednesday', 3],
+  ['wed', 3],
+  ['thursday', 4],
+  ['thu', 4],
+  ['thurs', 4],
+  ['friday', 5],
+  ['fri', 5],
+  ['saturday', 6],
+  ['sat', 6],
+]);
+
+/** Words that are consumed with the amount but should not become notes. */
+const AMOUNT_PREFIXES = new Set(['for', 'spent', 'paid', 'cost', 'total']);
+
+const AMOUNT_PATTERN = /^[+-]?(?:[$€£¥])?\d(?:[\d.,]*\d)?$/;
+const NTH_PATTERN = /^(\d{1,2})(?:st|nd|rd|th)$/;
+
+const MONTH_NAMES = MONTHS.map((month) => month.toLowerCase());
+const MONTH_INDEX = new Map(MONTH_NAMES.map((name, index) => [name, index]));
+
+function lower(value: string): string {
+  return value.trim().toLowerCase();
 }
 
-const WEEKDAY_NAMES = [
-  'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday',
-];
-
-/** Full names plus the common 3-letter abbreviations. */
-const WEEKDAY_PATTERN =
-  '(sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)';
-
-function weekdayIndex(name: string): number {
-  const lower = name.toLowerCase();
-  const exact = WEEKDAY_NAMES.indexOf(lower);
-  if (exact >= 0) return exact;
-  if (lower.length < 3) return -1;
-  // Abbreviations resolve by prefix: "fri" -> friday, "tue" -> tuesday.
-  return WEEKDAY_NAMES.findIndex((day) => day.startsWith(lower));
+function nextWeekday(today: string, weekday: number, mode: 'next' | 'last' | 'this'): string {
+  const current = weekdayOf(today);
+  if (mode === 'last') {
+    const diff = (current - weekday + 7) % 7 || 7;
+    return addDays(today, -diff);
+  }
+  if (mode === 'this') {
+    return addDays(today, weekday - current);
+  }
+  const diff = (weekday - current + 7) % 7 || 7;
+  return addDays(today, diff);
 }
 
-/** Next calendar date whose weekday matches `name` (strictly after today). */
-function upcomingWeekday(name: string): string | null {
-  const target = weekdayIndex(name);
-  if (target < 0) return null;
-  const today = todayISO();
-  for (let i = 1; i <= 7; i += 1) {
-    const candidate = addDays(today, i);
-    if (fromISODate(candidate).getDay() === target) return candidate;
+function nextMonthlyDay(today: string, day: number): string {
+  const current = fromISODate(today);
+  for (let step = 0; step <= 24; step += 1) {
+    const cursor = new Date(current.getFullYear(), current.getMonth() + step, 1);
+    const lastDay = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    const candidate = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(day, lastDay));
+    if (candidate.getTime() >= current.getTime()) {
+      return `${candidate.getFullYear()}-${String(candidate.getMonth() + 1).padStart(2, '0')}-${String(
+        candidate.getDate(),
+      ).padStart(2, '0')}`;
+    }
+  }
+  return addMonths(today, 1);
+}
+
+function withYear(monthIndex: number, day: number, year: number | null, today: string): string | null {
+  const current = fromISODate(today);
+  let resolvedYear = year ?? current.getFullYear();
+  if (!year) {
+    const candidate = new Date(resolvedYear, monthIndex, day);
+    if (candidate.getTime() < new Date(current.getFullYear(), current.getMonth(), current.getDate()).getTime()) {
+      resolvedYear += 1;
+    }
+  }
+  const candidate = new Date(resolvedYear, monthIndex, day);
+  if (candidate.getMonth() !== monthIndex || candidate.getDate() !== day) return null;
+  return `${resolvedYear}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Finds the first account whose name matches the supplied words. */
+function matchAccountName(
+  words: string[],
+  accounts: Account[],
+): { account: Account; length: number } | null {
+  const active = accounts.filter((account) => !account.archived);
+  for (let length = words.length; length >= 1; length -= 1) {
+    const candidate = words.slice(0, length).join(' ').toLowerCase();
+    const account = active.find((item) => item.name.toLowerCase() === candidate);
+    if (account) return { account, length };
   }
   return null;
 }
 
-function monthIndex(name: string): number {
-  const lower = name.toLowerCase().slice(0, 3);
-  return MONTHS.findIndex((m) => m.toLowerCase().slice(0, 3) === lower);
-}
-
-function pad(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+interface TransferMatch {
+  fromName: string;
+  toName: string;
+  used: Set<number>;
 }
 
 /**
- * Parses raw quick-add text into structured task metadata.
- * Pure function — safe to call on every keystroke.
+ * Extracts `from X to Y`, `from X -> Y` or `X -> Y`. Only recognised when the
+ * line explicitly says transfer or the arrow syntax is present, so a date
+ * range like `from monday to friday` is not mistaken for a transfer.
  */
-export function parseTaskInput(input: string, context: ParseContext): ParsedInput {
-  let working = ` ${input.replace(/\s+/g, ' ')} `;
-  const tokens: ParsedToken[] = [];
+function extractTransfer(words: string[], accounts: Account[]): TransferMatch | null {
+  const arrow = words.findIndex((word) => word === '->' || word === '→');
+  const transferIndex = words.findIndex((word) => lower(word) === 'transfer');
+  const fromIndex = words.findIndex((word) => lower(word) === 'from');
+  const toIndex = words.findIndex((word, index) => lower(word) === 'to' && index > fromIndex);
 
-  const result: ParsedInput = {
-    title: '',
-    projectId: null,
-    projectName: null,
-    categoryId: null,
-    categoryName: null,
-    place: null,
-    priority: 4,
-    date: null,
-    time: null,
-    endDate: null,
-    endTime: null,
-    allDay: true,
-    recurrence: null,
-    tags: [],
-    tokens,
+  if (arrow >= 0) {
+    const rightStart = arrow + 1;
+    const rightMatch = matchAccountName(words.slice(rightStart), accounts);
+
+    let leftStart = 0;
+    if (fromIndex >= 0 && fromIndex < arrow) leftStart = fromIndex + 1;
+    else leftStart = Math.max(0, arrow - 1);
+    const leftWords = words.slice(leftStart, arrow);
+    const leftMatch = matchAccountName(leftWords, accounts);
+
+    const used = new Set<number>([arrow]);
+    if (transferIndex >= 0) used.add(transferIndex);
+    if (fromIndex >= 0) used.add(fromIndex);
+    for (let index = leftStart; index < arrow; index += 1) used.add(index);
+    for (let index = rightStart; index < rightStart + (rightMatch?.length ?? words.length - rightStart); index += 1) {
+      used.add(index);
+    }
+
+    const fromName = leftMatch?.account.name ?? leftWords.join(' ').trim();
+    const toName =
+      rightMatch?.account.name ??
+      words.slice(rightStart).join(' ').trim();
+    return { fromName, toName, used };
+  }
+
+  if (fromIndex < 0 || toIndex < 0) return null;
+
+  const leftWords = words.slice(fromIndex + 1, toIndex);
+  const rightWords = words.slice(toIndex + 1);
+  const leftMatch = matchAccountName(leftWords, accounts);
+  const rightMatch = matchAccountName(rightWords, accounts);
+
+  // Without an explicit "transfer" keyword both sides must be real accounts.
+  if (transferIndex < 0 && (!leftMatch || !rightMatch)) return null;
+
+  const used = new Set<number>();
+  for (let index = fromIndex; index <= toIndex; index += 1) used.add(index);
+  const rightLength = rightMatch?.length ?? rightWords.length;
+  for (let index = toIndex + 1; index <= toIndex + rightLength; index += 1) used.add(index);
+  if (transferIndex >= 0) used.add(transferIndex);
+
+  return {
+    fromName: leftMatch?.account.name ?? leftWords.join(' ').trim(),
+    toName: rightMatch?.account.name ?? rightWords.join(' ').trim(),
+    used,
+  };
+}
+
+interface RecurrenceMatch {
+  rule: RecurrenceRule;
+  used: Set<number>;
+}
+
+function extractRecurrence(words: string[]): RecurrenceMatch | null {
+  const used = new Set<number>();
+  let freq: RecurrenceFreq | null = null;
+  let interval = 1;
+  let byWeekday: number[] = [];
+  let byMonthDay: number[] = [];
+
+  for (let index = 0; index < words.length; index += 1) {
+    if (used.has(index)) continue;
+    const word = lower(words[index]);
+
+    if (['daily', 'weekly', 'monthly', 'yearly', 'annually'].includes(word)) {
+      freq = word === 'annually' ? 'yearly' : (word as RecurrenceFreq);
+      used.add(index);
+      continue;
+    }
+
+    if (word === 'every') {
+      used.add(index);
+      let cursor = index + 1;
+      let step = 1;
+      const numeric = words[cursor] ? Number.parseInt(words[cursor], 10) : Number.NaN;
+      if (Number.isFinite(numeric) && numeric > 0) {
+        step = numeric;
+        used.add(cursor);
+        cursor += 1;
+      }
+
+      const unit = lower(words[cursor] ?? '');
+      const weekday = WEEKDAY_LOOKUP.get(unit);
+      if (weekday !== undefined) {
+        freq = 'weekly';
+        interval = step;
+        byWeekday = [weekday];
+        used.add(cursor);
+        continue;
+      }
+
+      if (['day', 'days'].includes(unit)) freq = 'daily';
+      else if (['week', 'weeks'].includes(unit)) freq = 'weekly';
+      else if (['month', 'months'].includes(unit)) freq = 'monthly';
+      else if (['year', 'years'].includes(unit)) freq = 'yearly';
+      if (freq) {
+        interval = step;
+        used.add(cursor);
+      }
+    }
+  }
+
+  // "on the 1st" supplies the day for monthly rules.
+  const onTheIndex = words.findIndex(
+    (word, index) => lower(word) === 'on' && lower(words[index + 1] ?? '') === 'the' && NTH_PATTERN.test(lower(words[index + 2] ?? '')),
+  );
+  if (onTheIndex >= 0) {
+    const match = NTH_PATTERN.exec(lower(words[onTheIndex + 2]));
+    if (match) {
+      const day = Number.parseInt(match[1], 10);
+      if (day >= 1 && day <= 31) {
+        if (!freq) freq = 'monthly';
+        if (freq === 'monthly') byMonthDay = [day];
+      }
+      used.add(onTheIndex);
+      used.add(onTheIndex + 1);
+      used.add(onTheIndex + 2);
+    }
+  }
+
+  if (!freq) return null;
+
+  if (freq === 'weekly' && byWeekday.length === 0) {
+    const weekday = words.findIndex((word) => WEEKDAY_LOOKUP.has(lower(word)));
+    if (weekday >= 0 && !used.has(weekday)) {
+      byWeekday = [WEEKDAY_LOOKUP.get(lower(words[weekday])) as number];
+      used.add(weekday);
+    }
+  }
+
+  return {
+    rule: { freq, interval, byWeekday, byMonthDay, until: null, count: null },
+    used,
+  };
+}
+
+interface DateMatch {
+  date: string;
+  used: Set<number>;
+}
+
+function extractDate(words: string[], today: string): DateMatch | null {
+  const used = new Set<number>();
+
+  const take = (index: number, length: number) => {
+    for (let offset = 0; offset < length; offset += 1) used.add(index + offset);
   };
 
-  /** Remove the first match of `re` from the working string. */
-  function consume(re: RegExp): RegExpMatchArray | null {
-    const match = working.match(re);
-    if (!match || match.index === undefined) return null;
-    const before = working.slice(0, match.index);
-    const after = working.slice(match.index + match[0].length);
-    working = `${before} ${after}`.replace(/\s+/g, ' ');
-    return match;
-  }
+  for (let index = 0; index < words.length; index += 1) {
+    if (used.has(index)) continue;
+    const word = lower(words[index]);
 
-  /** Prefer the longest known name so "#Deep Work" beats "#Deep". */
-  function consumeKnown(trigger: string, names: string[]): string | null {
-    const sorted = [...names].sort((a, b) => b.length - a.length);
-    // The trigger must be escaped the same way as the name: `#` is fine raw but
-    // `\+` and `\^` are the valid spellings for those two (and `\#` would be an
-    // invalid escape under the `u` flag).
-    const safeTrigger = escapeRegExp(trigger);
-    for (const name of sorted) {
-      const pattern = new RegExp(`(?:^|\\s)${safeTrigger}${escapeRegExp(name)}(?=\\s|$)`, 'iu');
-      if (pattern.test(working)) {
-        consume(pattern);
-        return name;
+    if (word === 'today') {
+      used.add(index);
+      return { date: today, used };
+    }
+    if (word === 'tonight') {
+      used.add(index);
+      return { date: today, used };
+    }
+    if (word === 'tomorrow') {
+      used.add(index);
+      return { date: addDays(today, 1), used };
+    }
+    if (word === 'yesterday') {
+      used.add(index);
+      return { date: addDays(today, -1), used };
+    }
+
+    if (isValidISODate(word)) {
+      used.add(index);
+      return { date: word, used };
+    }
+
+    const slash = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/.exec(word);
+    if (slash) {
+      const month = Number.parseInt(slash[1], 10);
+      const day = Number.parseInt(slash[2], 10);
+      let year = slash[3] ? Number.parseInt(slash[3], 10) : fromISODate(today).getFullYear();
+      if (year < 100) year += 2000;
+      const date = withYear(month - 1, day, year, today);
+      if (date) {
+        used.add(index);
+        return { date, used };
       }
     }
-    return null;
-  }
 
-  // ── 1. Category ───────────────────────────────────────────────────────────
-  const knownCategory = consumeKnown(
-    '^',
-    context.categories.map((category) => category.name),
-  );
-  if (knownCategory) {
-    const match = context.categories.find((category) => category.name === knownCategory);
-    result.categoryId = match?.id ?? null;
-    result.categoryName = knownCategory;
-    tokens.push({ kind: 'category', raw: `^${knownCategory}`, label: knownCategory });
-  } else {
-    const categoryMatch = consume(/(?:^|\s)\^([\p{L}\p{N}_-]+)/u);
-    if (categoryMatch) {
-      result.categoryName = categoryMatch[1];
-      tokens.push({ kind: 'category', raw: categoryMatch[0].trim(), label: categoryMatch[1] });
+    const weekdayWord = WEEKDAY_LOOKUP.get(word);
+    if (weekdayWord !== undefined) {
+      const previous = lower(words[index - 1] ?? '');
+      if (previous === 'last' || previous === 'next' || previous === 'this') {
+        used.add(index - 1);
+        used.add(index);
+        return { date: nextWeekday(today, weekdayWord, previous), used };
+      }
+      used.add(index);
+      return { date: nextWeekday(today, weekdayWord, 'next'), used };
+    }
+
+    if (word === 'next' || word === 'this') {
+      const unit = lower(words[index + 1] ?? '');
+      if (['week', 'month', 'year'].includes(unit)) {
+        used.add(index);
+        used.add(index + 1);
+        const date =
+          unit === 'week'
+            ? addDays(today, 7)
+            : unit === 'month'
+              ? addMonths(today, 1)
+              : addYears(today, 1);
+        return { date, used };
+      }
+    }
+
+    const ago = /^(\d+)(?:d|day|days)$/.exec(word);
+    if (ago && lower(words[index + 1] ?? '') === 'ago') {
+      used.add(index);
+      used.add(index + 1);
+      return { date: addDays(today, -Number.parseInt(ago[1], 10)), used };
+    }
+
+    const agoPhrase = word === 'ago' ? null : /^(\d+)$/.exec(word);
+    if (agoPhrase && ['day', 'days', 'week', 'weeks', 'month', 'months'].includes(lower(words[index + 1] ?? '')) && lower(words[index + 2] ?? '') === 'ago') {
+      const amount = Number.parseInt(agoPhrase[1], 10);
+      const unit = lower(words[index + 1]);
+      used.add(index);
+      used.add(index + 1);
+      used.add(index + 2);
+      const date =
+        unit.startsWith('day')
+          ? addDays(today, -amount)
+          : unit.startsWith('week')
+            ? addDays(today, -7 * amount)
+            : addMonths(today, -amount);
+      return { date, used };
+    }
+
+    if (word === 'in' || word === 'after') {
+      const amount = Number.parseInt(words[index + 1] ?? '', 10);
+      const unit = lower(words[index + 2] ?? '');
+      if (Number.isFinite(amount)) {
+        if (['day', 'days'].includes(unit)) {
+          take(index, 3);
+          return { date: addDays(today, amount), used };
+        }
+        if (['week', 'weeks'].includes(unit)) {
+          take(index, 3);
+          return { date: addDays(today, amount * 7), used };
+        }
+        if (['month', 'months'].includes(unit)) {
+          take(index, 3);
+          return { date: addMonths(today, amount), used };
+        }
+        if (['year', 'years'].includes(unit)) {
+          take(index, 3);
+          return { date: addYears(today, amount), used };
+        }
+      }
+    }
+
+    const monthName = MONTH_INDEX.get(word.replace(/,$/, ''));
+    if (monthName !== undefined) {
+      const dayToken = lower(words[index + 1] ?? '');
+      const yearToken = lower(words[index + 2] ?? '');
+      if (/^\d{1,2}$/.test(dayToken)) {
+        const day = Number.parseInt(dayToken, 10);
+        const year = /^\d{4}$/.test(yearToken) ? Number.parseInt(yearToken, 10) : null;
+        const date = withYear(monthName, day, year, today);
+        if (date) {
+          take(index, year ? 3 : 2);
+          return { date, used };
+        }
+      }
+    }
+
+    const dayFirst = /^(\d{1,2})$/.exec(word);
+    if (dayFirst) {
+      const monthNameNext = MONTH_INDEX.get(lower(words[index + 1] ?? '').replace(/,$/, ''));
+      if (monthNameNext !== undefined) {
+        const date = withYear(monthNameNext, Number.parseInt(dayFirst[1], 10), null, today);
+        if (date) {
+          take(index, 2);
+          return { date, used };
+        }
+      }
+    }
+
+    if (word === 'on' && lower(words[index + 1] ?? '') === 'the') {
+      const nth = NTH_PATTERN.exec(lower(words[index + 2] ?? ''));
+      if (nth) {
+        const day = Number.parseInt(nth[1], 10);
+        if (day >= 1 && day <= 31) {
+          take(index, 3);
+          return { date: nextMonthlyDay(today, day), used };
+        }
+      }
     }
   }
 
-  // ── 2. Project ────────────────────────────────────────────────────────────
-  const knownProject = consumeKnown(
-    '#',
-    context.projects.map((project) => project.name),
-  );
-  if (knownProject) {
-    const match = context.projects.find((project) => project.name === knownProject);
-    result.projectId = match?.id ?? null;
-    result.projectName = knownProject;
-    tokens.push({ kind: 'project', raw: `#${knownProject}`, label: knownProject });
-  } else {
-    const projectMatch = consume(/(?:^|\s)#([\p{L}\p{N}_-]+)/u);
-    if (projectMatch) {
-      // Unknown name: remember it so saving the task can create the project.
-      result.projectName = projectMatch[1];
-      tokens.push({ kind: 'project', raw: projectMatch[0].trim(), label: projectMatch[1] });
+  return null;
+}
+
+/** Removes words that were consumed by a match from a copy of the line. */
+function without(words: string[], used: Set<number>): string[] {
+  return words.filter((_, index) => !used.has(index));
+}
+
+/** First calendar day for a recurrence rule relative to today. */
+function firstRecurrenceDate(rule: RecurrenceRule, today: string): string {
+  if (rule.freq === 'weekly' && rule.byWeekday.length > 0) {
+    return nextWeekday(today, rule.byWeekday[0], 'next');
+  }
+  if (rule.freq === 'monthly' && rule.byMonthDay.length > 0) {
+    return nextMonthlyDay(today, rule.byMonthDay[0]);
+  }
+  if (rule.freq === 'yearly' && rule.byMonthDay.length > 0) {
+    const current = fromISODate(today);
+    const thisYear = withYear(current.getMonth(), rule.byMonthDay[0], null, today);
+    return thisYear ?? addYears(today, 1);
+  }
+  return today;
+}
+
+export function parseTransactionInput(input: string, context: ParseContext): ParsedTransaction {
+  const today = context.today ?? todayISO();
+  let words = input.trim().split(/\s+/).filter(Boolean);
+
+  const tokens: ParsedToken[] = [];
+  const errors: ParseError[] = [];
+  let cleared = false;
+  let payeeName: string | null = null;
+  let payeeId: string | null = null;
+  let categoryName: string | null = null;
+  let categoryId: string | null = null;
+  let accountName: string | null = null;
+  let accountId: string | null = null;
+  const tags: string[] = [];
+
+  /* ── Marker tokens: @payee #category ^account +tag !cleared ───────────── */
+
+  const markerUsed = new Set<number>();
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word.length < 2) continue;
+
+    const marker = word[0];
+    const value = word.slice(1).replace(/[.,;:!?]+$/, '');
+    if (!value) continue;
+
+    if (marker === '@') {
+      payeeName = value;
+      markerUsed.add(index);
+    } else if (marker === '#') {
+      categoryName = value;
+      markerUsed.add(index);
+    } else if (marker === '^') {
+      accountName = value;
+      markerUsed.add(index);
+    } else if (marker === '+') {
+      if (!/^\d/.test(value)) {
+        tags.push(value.toLowerCase());
+        markerUsed.add(index);
+      }
+    } else if (marker === '!' && lower(value) === 'cleared') {
+      cleared = true;
+      markerUsed.add(index);
     }
   }
 
-  // ── 3. Place ──────────────────────────────────────────────────────────────
-  const placeMatch = consume(/(?:^|\s)@([\p{L}\p{N}_-]+)/u);
-  if (placeMatch) {
-    result.place = placeMatch[1];
-    tokens.push({ kind: 'place', raw: placeMatch[0].trim(), label: `@${placeMatch[1]}` });
+  words = without(words, markerUsed);
+
+  /* ── Transfer accounts ─────────────────────────────────────────────────── */
+
+  const transfer = extractTransfer(words, context.accounts);
+  let transferAccountId: string | null = null;
+  let transferAccountName: string | null = null;
+
+  if (transfer) {
+    words = without(words, transfer.used);
+    const from = context.accounts.find(
+      (account) => account.name.toLowerCase() === transfer.fromName.toLowerCase(),
+    );
+    const to = context.accounts.find(
+      (account) => account.name.toLowerCase() === transfer.toName.toLowerCase(),
+    );
+    if (!from || !to) {
+      errors.push({
+        code: 'transfer-incomplete',
+        message: 'A transfer needs two existing accounts, e.g. “transfer 300 from Checking to Savings”.',
+      });
+    } else if (from.id === to.id) {
+      errors.push({ code: 'transfer-same', message: 'Choose two different accounts for a transfer.' });
+    } else {
+      accountId = from.id;
+      accountName = from.name;
+      transferAccountId = to.id;
+      transferAccountName = to.name;
+      tokens.push({
+        kind: 'transfer',
+        label: `${from.name} → ${to.name}`,
+        raw: `${from.name}->${to.name}`,
+        status: 'known',
+      });
+    }
   }
 
-  // ── 4. Priority ───────────────────────────────────────────────────────────
-  const priorityMatch = consume(/(?:^|\s)!(?:p)?([1-4])(?=\s|$)/i);
-  if (priorityMatch) {
-    result.priority = Number(priorityMatch[1]) as Priority;
-    tokens.push({ kind: 'priority', raw: priorityMatch[0].trim(), label: `Priority ${priorityMatch[1]}` });
+  /* ── Recurrence, then a single date ────────────────────────────────────── */
+
+  const recurrenceMatch = extractRecurrence(words);
+  words = recurrenceMatch ? without(words, recurrenceMatch.used) : words;
+
+  const dateMatch = extractDate(words, today);
+  const date = dateMatch?.date ?? null;
+  words = dateMatch ? without(words, dateMatch.used) : words;
+
+  const recurrence = recurrenceMatch?.rule ?? null;
+  let resolvedDate = date ?? today;
+  if (recurrence && !date) resolvedDate = firstRecurrenceDate(recurrence, today);
+
+  if (recurrence && transfer) {
+    errors.push({
+      code: 'recurring-transfer',
+      message: 'Recurring transfers are not supported yet. Record a single transfer instead.',
+    });
   }
 
-  // ── 5. Recurrence (before dates, so "every monday" is not read as a date) ──
-  const recurrence = parseRecurrence(consume);
   if (recurrence) {
-    result.recurrence = recurrence.rule;
-    tokens.push({ kind: 'recurrence', raw: recurrence.raw, label: recurrence.label });
+    tokens.push({
+      kind: 'recurrence',
+      label: describeRecurrence(recurrence),
+      raw: '',
+      status: 'known',
+    });
+  }
+  tokens.push({
+    kind: 'date',
+    label: formatDate(resolvedDate),
+    raw: resolvedDate,
+    status: date ? 'known' : 'default',
+  });
+
+  /* ── Amount ────────────────────────────────────────────────────────────── */
+
+  const amountIndices = words
+    .map((word, index) => (AMOUNT_PATTERN.test(word) ? index : -1))
+    .filter((index) => index >= 0);
+
+  let rawAmount: string | null = null;
+  let amount: number | null = null;
+
+  if (amountIndices.length > 1) {
+    errors.push({
+      code: 'amount-ambiguous',
+      message: 'More than one amount was found. Keep a single amount per transaction.',
+    });
+  } else if (amountIndices.length === 1) {
+    const index = amountIndices[0];
+    rawAmount = words[index];
+    const parsed = parseAmount(rawAmount, context.locale);
+    if (Number.isFinite(parsed) && Math.abs(parsed) > 0) amount = Math.abs(parsed);
   }
 
-  // ── 6. Time range ("from 9 to 11am", "9-11am") ────────────────────────────
-  const rangeMatch =
-    consume(/\bfrom\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|–)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) ??
-    consume(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (rangeMatch) {
-    const startMeridiem = rangeMatch[3] || rangeMatch[6];
-    const endMeridiem = rangeMatch[6] || rangeMatch[3];
-    const start = parseTimeToken(`${rangeMatch[1]}${rangeMatch[2] ? `:${rangeMatch[2]}` : ''}${startMeridiem ?? ''}`);
-    const end = parseTimeToken(`${rangeMatch[4]}${rangeMatch[5] ? `:${rangeMatch[5]}` : ''}${endMeridiem ?? ''}`);
-    if (start && end) {
-      result.time = start;
-      result.endTime = timeToMinutes(end) > timeToMinutes(start) ? end : null;
-      result.allDay = false;
-      tokens.push({ kind: 'time', raw: rangeMatch[0].trim(), label: start });
-      if (result.endTime) {
-        tokens.push({ kind: 'endTime', raw: rangeMatch[0].trim(), label: result.endTime });
-      }
-    }
+  if (amount === null && amountIndices.length <= 1) {
+    errors.push({
+      code: 'amount-missing',
+      message: 'Add an amount, e.g. “coffee 4.50 @Starbucks”.',
+    });
   }
 
-  // ── 7. Start date ─────────────────────────────────────────────────────────
-  const date = parseDate(consume);
-  if (date) {
-    result.date = date.iso;
-    tokens.push({ kind: 'date', raw: date.raw, label: date.label });
-    if (date.night) {
-      result.allDay = false;
-      if (!result.time) result.time = '20:00';
-    }
+  if (rawAmount !== null) {
+    words = words.filter((_, index) => index !== amountIndices[0]);
+    // Drop filler words that only introduce the amount ("spent 12").
+    if (words.length > 1 && AMOUNT_PREFIXES.has(lower(words[0]))) words = words.slice(1);
   }
 
-  // ── 8. End date ("until friday") ──────────────────────────────────────────
-  // Only unambiguous keywords are accepted here; a bare "to" is reserved for
-  // end times ("3pm to 5pm") so the two can never fight over the same token.
-  const beforeEndDate = working;
-  const endKeyword = consume(/\b(?:until|til|till|through|thru)\b/i);
-  if (endKeyword) {
-    const end = parseDate(consume);
-    if (end && (!result.date || end.iso > result.date)) {
-      if (result.date) {
-        result.endDate = end.iso;
-        tokens.push({ kind: 'endDate', raw: `${endKeyword[0].trim()} ${end.raw}`, label: end.label });
+  /* ── Type ──────────────────────────────────────────────────────────────── */
+
+  let type: ParsedTransactionType = transfer ? 'transfer' : 'expense';
+  if (rawAmount && !transfer && rawAmount.trim().startsWith('+')) type = 'income';
+
+  /* ── Account fallback ──────────────────────────────────────────────────── */
+
+  if (!accountId) {
+    if (accountName) {
+      const match = context.accounts.find(
+        (account) => account.name.toLowerCase() === accountName!.toLowerCase(),
+      );
+      if (match) {
+        accountId = match.id;
+        accountName = match.name;
       } else {
-        // "until friday" with no start yet: treat it as the start date.
-        result.date = end.iso;
-        tokens.push({ kind: 'date', raw: end.raw, label: end.label });
+        errors.push({
+          code: 'account-unknown',
+          message: `Unknown account “${accountName}”. Add it in Settings first.`,
+        });
       }
     } else {
-      working = beforeEndDate; // put the keyword back so it stays in the title
-    }
-  }
-
-  // ── 9. Start time ─────────────────────────────────────────────────────────
-  if (!result.time) {
-    const time = parseTime(consume);
-    if (time) {
-      result.time = time.value;
-      result.allDay = false;
-      tokens.push({ kind: 'time', raw: time.raw, label: time.value });
-    }
-  }
-
-  // ── 10. End time ("3pm to 5pm", "at 9 until 11") ──────────────────────────
-  if (result.time && !result.endTime) {
-    const endTime = consume(
-      /\b(?:until|to|till|through|thru|[-–])\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i,
-    );
-    if (endTime) {
-      const value = parseTimeToken(endTime[1]);
-      if (value && timeToMinutes(value) > timeToMinutes(result.time)) {
-        result.endTime = value;
-        result.allDay = false;
-        tokens.push({ kind: 'endTime', raw: endTime[0].trim(), label: value });
+      const preferred =
+        context.accounts.find((account) => account.id === context.defaultAccountId && !account.archived) ??
+        context.accounts.find((account) => !account.archived);
+      if (preferred) {
+        accountId = preferred.id;
+        accountName = preferred.name;
+      } else {
+        errors.push({ code: 'account-missing', message: 'Add an account before recording transactions.' });
       }
     }
   }
 
-  // ── 11. Tags ──────────────────────────────────────────────────────────────
-  let tagMatch = consume(/(?:^|\s)\+([\p{L}\p{N}_-]+)/u);
-  while (tagMatch) {
-    result.tags.push(tagMatch[1]);
-    tokens.push({ kind: 'tag', raw: tagMatch[0].trim(), label: `+${tagMatch[1]}` });
-    tagMatch = consume(/(?:^|\s)\+([\p{L}\p{N}_-]+)/u);
+  /* ── Payee / category resolution ───────────────────────────────────────── */
+
+  const payee = payeeName
+    ? context.payees.find((item) => item.name.toLowerCase() === payeeName!.toLowerCase())
+    : undefined;
+  if (payee) {
+    payeeId = payee.id;
+    payeeName = payee.name;
   }
 
-  // ── 12. Title + final defaults ────────────────────────────────────────────
-  result.title = working.replace(/\s+/g, ' ').trim();
-
-  // Drop a preposition that was left behind by a consumed date/time token
-  // ("Ship v2 on" -> "Ship v2").
-  if ((result.date || result.time) && result.title) {
-    result.title = result.title.replace(/\s*\b(on|at|by|due|to|until)\b\s*$/i, '').trim();
-  }
-
-  // A recurring task with no explicit date starts at its first occurrence.
-  if (result.recurrence && !result.date) {
-    result.date = firstOccurrence(result.recurrence);
-  }
-
-  if (result.time && !result.date) result.date = todayISO();
-  if (result.date && !result.time) result.allDay = true;
-  if (!result.endDate) result.endDate = result.date;
-  // An end time only makes sense with a start time.
-  if (!result.time || !result.endTime) result.endTime = null;
-
-  if (!result.projectId && context.fallbackProjectId !== undefined) {
-    result.projectId = context.fallbackProjectId;
-  }
-  if (result.projectId) {
-    const project = context.projects.find((p) => p.id === result.projectId);
-    if (project) {
-      result.projectName = project.name;
-      // A project implies its category unless one was typed explicitly.
-      if (!result.categoryId) {
-        result.categoryId = project.categoryId;
-        result.categoryName =
-          context.categories.find((category) => category.id === project.categoryId)?.name ?? null;
-      }
+  const category = categoryName
+    ? context.categories.find((item) => item.name.toLowerCase() === categoryName!.toLowerCase())
+    : undefined;
+  if (category) {
+    categoryId = category.id;
+    categoryName = category.name;
+  } else if (!categoryName && payee?.defaultCategoryId) {
+    const fallback = context.categories.find((item) => item.id === payee.defaultCategoryId);
+    if (fallback) {
+      categoryId = fallback.id;
+      categoryName = fallback.name;
     }
   }
 
-  // A category with no project resolves to its only project, if it has one.
-  if (!result.projectId && result.categoryId) {
-    const children = context.projects.filter((project) => project.categoryId === result.categoryId);
-    if (children.length === 1) {
-      result.projectId = children[0].id;
-      result.projectName = children[0].name;
-    }
+  const isNewPayee = !!payeeName && !payee;
+  const isNewCategory = !!categoryName && !category;
+
+  /* ── Tokens for the UI ─────────────────────────────────────────────────── */
+
+  if (amount !== null) {
+    const signed = type === 'income' ? amount : -amount;
+    tokens.unshift({
+      kind: 'amount',
+      label: `${signed < 0 ? '−' : '+'}${formatMoney(Math.abs(signed), context.currency, context.locale)}`,
+      raw: rawAmount ?? '',
+      status: 'known',
+    });
+    tokens.push({
+      kind: 'amount',
+      label: type === 'income' ? 'Income' : type === 'transfer' ? 'Transfer' : 'Expense',
+      raw: type,
+      status: 'known',
+    });
   }
 
-  return result;
-}
-
-/** First date a recurrence rule can land on, starting from today. */
-function firstOccurrence(rule: RecurrenceRule): string {
-  const today = todayISO();
-  // Plain interval rules (and yearly ones) simply start today; weekday and
-  // day-of-month rules snap forward to their next matching calendar day.
-  if (rule.freq === 'daily' || rule.freq === 'yearly') return today;
-  return nextOccurrence(rule, addDays(today, -1));
-}
-
-// ── Recurrence parsing ───────────────────────────────────────────────────────
-
-function makeRule(freq: RecurrenceFreq, interval: number): RecurrenceRule {
-  return { freq, interval, byWeekday: [], byMonthDay: [], until: null, count: null };
-}
-
-function parseRecurrence(
-  consume: (re: RegExp) => RegExpMatchArray | null,
-): { rule: RecurrenceRule; raw: string; label: string } | null {
-  const base = (rule: RecurrenceRule, raw: string, label: string) => ({ rule, raw, label });
-
-  const everyDay = consume(/\bevery\s+(\d+)\s*(day|days)\b/i) ?? consume(/\bevery\s+day\b/i);
-  if (everyDay) {
-    const interval = everyDay[1] ? Number(everyDay[1]) : 1;
-    const rule = makeRule('daily', interval);
-    return base(rule, everyDay[0], interval === 1 ? 'Every day' : `Every ${interval} days`);
+  if (accountName) {
+    tokens.push({
+      kind: 'account',
+      label: accountName,
+      raw: accountName,
+      status: accountId ? 'known' : 'error',
+    });
   }
 
-  const everyWeek = consume(/\bevery\s+(\d+)\s*(week|weeks)\b/i) ?? consume(/\bevery\s+week\b/i);
-  if (everyWeek) {
-    const interval = everyWeek[1] ? Number(everyWeek[1]) : 1;
-    const rule = makeRule('weekly', interval);
-    return base(rule, everyWeek[0], interval === 1 ? 'Every week' : `Every ${interval} weeks`);
+  if (payeeName) {
+    tokens.push({
+      kind: 'payee',
+      label: isNewPayee ? `New payee · ${payeeName}` : payeeName,
+      raw: payeeName,
+      status: isNewPayee ? 'new' : 'known',
+    });
   }
 
-  const everyWeekday = consume(new RegExp(`\\bevery\\s+${WEEKDAY_PATTERN}\\b`, 'i'));
-  if (everyWeekday) {
-    const rule = makeRule('weekly', 1);
-    rule.byWeekday = [weekdayIndex(everyWeekday[1])];
-    return base(rule, everyWeekday[0], `Every ${WEEKDAYS_SHORT[rule.byWeekday[0]]}`);
+  if (categoryName) {
+    tokens.push({
+      kind: 'category',
+      label: isNewCategory ? `New category · ${categoryName}` : categoryName,
+      raw: categoryName,
+      status: isNewCategory ? 'new' : categoryId ? 'known' : 'default',
+    });
   }
 
-  const everyMonth = consume(/\bevery\s+(\d+)\s*(month|months)\b/i) ?? consume(/\bevery\s+month\b/i);
-  if (everyMonth) {
-    const interval = everyMonth[1] ? Number(everyMonth[1]) : 1;
-    const rule = makeRule('monthly', interval);
-    return base(rule, everyMonth[0], interval === 1 ? 'Every month' : `Every ${interval} months`);
+  for (const tag of tags) {
+    tokens.push({ kind: 'tag', label: `+${tag}`, raw: tag, status: 'known' });
   }
 
-  const everyMonthDay = consume(/\bevery\s+(\d{1,2})(?:st|nd|rd|th)\b/i);
-  if (everyMonthDay) {
-    const rule = makeRule('monthly', 1);
-    rule.byMonthDay = [Number(everyMonthDay[1])];
-    return base(rule, everyMonthDay[0], `Every month on day ${everyMonthDay[1]}`);
+  if (cleared) {
+    tokens.push({ kind: 'cleared', label: 'Cleared', raw: '!cleared', status: 'known' });
   }
 
-  const everyYear = consume(/\bevery\s+(\d+)?\s*(year|years)\b/i) ?? consume(/\b(?:yearly|annually)\b/i);
-  if (everyYear) {
-    const interval = everyYear[1] ? Number(everyYear[1]) : 1;
-    const rule = makeRule('yearly', interval);
-    return base(rule, everyYear[0], interval === 1 ? 'Every year' : `Every ${interval} years`);
-  }
+  const notes = words.join(' ').replace(/\s+/g, ' ').trim();
 
-  const shorthand = consume(/\b(daily|weekly|monthly)\b/i);
-  if (shorthand) {
-    const word = shorthand[1].toLowerCase();
-    const rule = makeRule(word as RecurrenceFreq, 1);
-    return base(rule, shorthand[0], `Every ${word.replace('ly', '')}`);
-  }
-
-  return null;
-}
-
-// ── Date parsing ─────────────────────────────────────────────────────────────
-
-function parseDate(
-  consume: (re: RegExp) => RegExpMatchArray | null,
-): { iso: string; raw: string; label: string; night?: boolean } | null {
-  const today = todayISO();
-
-  const named = consume(/\b(today|tomorrow|tonight)\b/i);
-  if (named) {
-    const word = named[1].toLowerCase();
-    if (word === 'today') return { iso: today, raw: named[0], label: 'Today' };
-    if (word === 'tonight') return { iso: today, raw: named[0], label: 'Tonight', night: true };
-    return { iso: addDays(today, 1), raw: named[0], label: 'Tomorrow' };
-  }
-
-  const inN = consume(/\bin\s+(\d+)\s+(day|days|week|weeks|month|months)\b/i);
-  if (inN) {
-    const n = Number(inN[1]);
-    const unit = inN[2].toLowerCase();
-    let iso = today;
-    if (unit.startsWith('day')) iso = addDays(today, n);
-    else if (unit.startsWith('week')) iso = addDays(today, n * 7);
-    else iso = addMonths(today, n);
-    return { iso, raw: inN[0], label: inN[0].trim() };
-  }
-
-  const nextWeekday = consume(new RegExp(`\\bnext\\s+${WEEKDAY_PATTERN}\\b`, 'i'));
-  if (nextWeekday) {
-    const iso = upcomingWeekday(nextWeekday[1]);
-    if (iso) return { iso, raw: nextWeekday[0], label: nextWeekday[0].trim() };
-  }
-
-  const thisWeekday = consume(new RegExp(`\\bthis\\s+${WEEKDAY_PATTERN}\\b`, 'i'));
-  if (thisWeekday) {
-    const iso = upcomingWeekday(thisWeekday[1]);
-    if (iso) return { iso, raw: thisWeekday[0], label: thisWeekday[0].trim() };
-  }
-
-  const nextPeriod = consume(/\bnext\s+(week|month|year)\b/i);
-  if (nextPeriod) {
-    const unit = nextPeriod[1].toLowerCase();
-    const iso = unit === 'week' ? addDays(today, 7) : unit === 'month' ? addMonths(today, 1) : addMonths(today, 12);
-    return { iso, raw: nextPeriod[0], label: nextPeriod[0].trim() };
-  }
-
-  const iso = consume(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso && isValidISODate(iso[0])) {
-    return { iso: iso[0], raw: iso[0], label: iso[0] };
-  }
-
-  const slash = consume(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
-  if (slash) {
-    let a = Number(slash[1]);
-    let b = Number(slash[2]);
-    let year = slash[3] ? Number(slash[3]) : fromISODate(today).getFullYear();
-    if (year < 100) year += 2000;
-    if (a > 12 && b <= 12) [a, b] = [b, a]; // day/month input
-    if (a >= 1 && a <= 12 && b >= 1 && b <= 31) {
-      let candidate = `${year}-${pad(a)}-${pad(b)}`;
-      if (!isValidISODate(candidate)) return null;
-      // A bare M/D in the past rolls to next year.
-      if (!slash[3] && candidate < today) candidate = `${year + 1}-${pad(a)}-${pad(b)}`;
-      return { iso: candidate, raw: slash[0], label: candidate };
-    }
-  }
-
-  const monthDay = consume(
-    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i,
-  );
-  if (monthDay) {
-    const month = monthIndex(monthDay[1]);
-    const day = Number(monthDay[2]);
-    let year = monthDay[3] ? Number(monthDay[3]) : fromISODate(today).getFullYear();
-    const candidate = `${year}-${pad(month + 1)}-${pad(day)}`;
-    if (!isValidISODate(candidate)) return null;
-    if (!monthDay[3] && candidate < today) year += 1;
-    const finalISO = `${year}-${pad(month + 1)}-${pad(day)}`;
-    return { iso: finalISO, raw: monthDay[0], label: finalISO };
-  }
-
-  const dayMonth = consume(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?:\s+(\d{4}))?\b/i);
-  if (dayMonth) {
-    const month = monthIndex(dayMonth[2]);
-    const day = Number(dayMonth[1]);
-    let year = dayMonth[3] ? Number(dayMonth[3]) : fromISODate(today).getFullYear();
-    let candidate = `${year}-${pad(month + 1)}-${pad(day)}`;
-    if (!isValidISODate(candidate)) return null;
-    if (!dayMonth[3] && candidate < today) candidate = `${year + 1}-${pad(month + 1)}-${pad(day)}`;
-    return { iso: candidate, raw: dayMonth[0], label: candidate };
-  }
-
-  const bareWeekday = consume(new RegExp(`\\b${WEEKDAY_PATTERN}\\b`, 'i'));
-  if (bareWeekday) {
-    const iso = upcomingWeekday(bareWeekday[1]);
-    if (iso) return { iso, raw: bareWeekday[0], label: bareWeekday[0].trim() };
-  }
-
-  return null;
-}
-
-// ── Time parsing ─────────────────────────────────────────────────────────────
-
-function parseTime(
-  consume: (re: RegExp) => RegExpMatchArray | null,
-): { value: string; raw: string } | null {
-  const meridiem = consume(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (meridiem) {
-    const value = parseTimeToken(`${meridiem[1]}${meridiem[2] ? `:${meridiem[2]}` : ''}${meridiem[3]}`);
-    if (value) return { value, raw: meridiem[0] };
-  }
-
-  const clock = consume(/\b(?:at\s+)?(\d{1,2}):(\d{2})\b/i);
-  if (clock) {
-    const value = parseTimeToken(`${clock[1]}:${clock[2]}`);
-    if (value) return { value, raw: clock[0] };
-  }
-
-  const atHour = consume(/\bat\s+(\d{1,2})\b/i);
-  if (atHour) {
-    const value = parseTimeToken(atHour[1]);
-    if (value) return { value, raw: atHour[0] };
-  }
-
-  const named = consume(/\b(noon|midday|midnight|morning|afternoon|evening|night)\b/i);
-  if (named) {
-    const value = parseTimeToken(named[1]);
-    if (value) return { value, raw: named[0] };
-  }
-
-  return null;
+  return {
+    type,
+    amount,
+    date: resolvedDate,
+    accountId,
+    accountName: accountName ? accountName : null,
+    transferAccountId,
+    transferAccountName,
+    categoryId,
+    categoryName: categoryName ? categoryName : null,
+    isNewCategory,
+    payeeId,
+    payeeName: payeeName ? payeeName : null,
+    isNewPayee,
+    tags,
+    cleared,
+    recurrence,
+    notes,
+    tokens,
+    errors,
+    valid: errors.length === 0 && amount !== null,
+  };
 }

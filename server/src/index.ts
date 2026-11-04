@@ -1,5 +1,5 @@
 /**
- * Tasker sync relay.
+ * Budget sync relay.
  *
  * A deliberately small Express service: bearer-key identity, an append-only
  * change log per user, and a snapshot endpoint for new devices. Encrypted
@@ -27,7 +27,12 @@ const BATCH_LIMIT = 200;
 const MAX_PAYLOAD = 300_000;
 const HLC_PATTERN = /^\d{15}-\d{6}-[A-Za-z0-9-]{6,64}$/;
 
-const allowedOrigins = (process.env.CORS_ORIGINS ?? 'https://tasker.asterki.xyz')
+/** Must match src/sync/protocol.ts. */
+const SYNC_PROTOCOL_VERSION = 2;
+const SYNC_SCHEMA_VERSION = 6;
+const LEGACY_ENTITY_TYPES = new Set(['task', 'project', 'place']);
+
+const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -97,7 +102,35 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'tasker-sync' });
+  res.json({
+    ok: true,
+    service: 'budget-sync',
+    protocol: SYNC_PROTOCOL_VERSION,
+    schema: SYNC_SCHEMA_VERSION,
+  });
+});
+
+/**
+ * Protocol gate. Old Tasker clients send no headers and are told to upgrade;
+ * Budget clients always announce both the wire protocol and data schema.
+ */
+app.use('/v1/sync', (req: Request, res: Response, next: NextFunction) => {
+  const protocol = req.get('x-budget-sync-protocol') ?? '';
+  const schema = req.get('x-budget-sync-schema') ?? '';
+
+  if (protocol !== String(SYNC_PROTOCOL_VERSION) || schema !== String(SYNC_SCHEMA_VERSION)) {
+    res.status(426).json({
+      error: 'incompatible_protocol',
+      message:
+        `This relay requires Budget sync protocol ${SYNC_PROTOCOL_VERSION} ` +
+        `(schema ${SYNC_SCHEMA_VERSION}). Update the app or point it at a Budget relay.`,
+      protocol: SYNC_PROTOCOL_VERSION,
+      schema: SYNC_SCHEMA_VERSION,
+    });
+    return;
+  }
+
+  next();
 });
 
 app.get('/v1/sync/head', authenticate, (req, res) => {
@@ -127,6 +160,16 @@ app.post('/v1/sync/push', authenticate, (req, res) => {
   for (const raw of body.changes) {
     const item = raw as Record<string, unknown>;
     const entityType = item.entityType;
+
+    if (typeof entityType === 'string' && LEGACY_ENTITY_TYPES.has(entityType)) {
+      res.status(400).json({
+        error: 'legacy_entity_type',
+        message:
+          'This change uses a Tasker entity type. Budget sync only accepts accounts, ' +
+          'categories, groups, payees, transactions, budgets, recurring rules and settings.',
+      });
+      return;
+    }
 
     if (
       typeof item.changeId !== 'string' ||
@@ -241,5 +284,5 @@ const purgeTimer = setInterval(() => purgeOldChanges(RETENTION_DAYS), 6 * 60 * 6
 purgeTimer.unref();
 
 app.listen(PORT, () => {
-  console.log(`tasker sync relay listening on ${PORT}`);
+  console.log(`budget sync relay listening on ${PORT}`);
 });

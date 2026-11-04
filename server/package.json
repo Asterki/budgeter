@@ -1,9 +1,9 @@
 {
-  "name": "tasker-sync-relay",
+  "name": "budget-sync-relay",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Minimal append-only sync relay for Tasker.",
+  "description": "Minimal append-only sync relay for Budget.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",

@@ -1,15 +1,16 @@
 {
-  "name": "tasker",
+  "name": "budget",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.7",
-  "description": "Tasker — a local-first, offline-capable todo and planning app.",
+  "description": "Budget — a local-first, offline-capable personal budgeting app.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit"
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -21,6 +22,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   },

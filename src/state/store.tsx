@@ -17,97 +17,170 @@ import {
   type ReactNode,
 } from 'react';
 
-import {
-  clearAll,
-  createId,
-  db,
-  ensureUuids,
-  loadSnapshot,
-  normalizeSettings,
-  resetUuidMigration,
-} from '../db/database';
+import { clearAll, createId, db, loadSnapshot, normalizeSettings, type DatabaseSnapshot } from '../db/database';
 import type {
+  Account,
+  AccountType,
   BackupFile,
+  Budget,
   Category,
-  Place,
-  Priority,
-  Project,
-  RecurrenceRule,
+  CategoryGroup,
+  CategoryKind,
+  CategorizationRule,
+  Payee,
+  Progress,
+  RecurringRule,
   Settings,
-  Tag,
-  Task,
+  Transaction,
+  TransactionType,
 } from '../domain/types';
 import { DEFAULT_SETTINGS } from '../domain/types';
-import { isExhausted, nextOccurrence } from '../domain/recurrence';
-import { applyCompletion, revertCompletion, type CompletionOutcome, type CompletionUndo } from '../domain/progress';
+import { todayISO } from '../domain/date';
+import { nextOccurrence } from '../domain/recurrence';
+import { achievementTitle, applyAchievementUnlocks } from '../domain/achievements';
+import { closedMonths, reviewMonth } from '../domain/monthly';
 import {
-  disconnectSync,
-  getSyncInfo,
-  loadSyncRuntime,
-  registerApplyHandler,
-} from '../sync/engine';
+  applyMonthReview,
+  applyReconciliation,
+  applyTransactionLog,
+  levelForXp,
+} from '../domain/progress';
+import {
+  dueOccurrences,
+  generatedCounts,
+  occurrenceKey,
+  recurringTransactionId,
+} from '../domain/recurring';
+import { disconnectSync, getSyncInfo, loadSyncRuntime, registerApplyHandler } from '../sync/engine';
+import { emitReward } from './rewards';
 
-export const PROJECT_COLORS = [
-  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff',
-  '#39c5cf', '#db61a2', '#8b949e', '#a5d6ff', '#ffa657',
-];
+export const ACCOUNT_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39c5cf'];
 
 export const CATEGORY_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39c5cf'];
 
-const BACKUP_VERSION = 3;
+const BACKUP_VERSION = 5;
 
-export interface NewTaskInput {
-  title: string;
-  projectId?: string | null;
-  projectName?: string | null;
-  categoryName?: string | null;
-  /** Set to nest this task under another one. */
-  parentId?: string | null;
-  place?: string | null;
-  priority?: Priority;
-  date?: string | null;
-  time?: string | null;
-  endDate?: string | null;
-  endTime?: string | null;
-  allDay?: boolean;
-  notes?: string;
-  tags?: string[];
-  lane?: string;
-  recurrence?: RecurrenceRule | null;
+export interface NewAccountInput {
+  name: string;
+  type?: AccountType;
+  color?: string;
+  openingBalance?: number;
+  currency?: string;
 }
 
-interface TaskerContextValue {
+export interface NewCategoryInput {
+  name: string;
+  kind?: CategoryKind;
+  color?: string;
+  groupId?: string | null;
+}
+
+export interface NewTransactionInput {
+  accountId: string;
+  date: string;
+  /** Signed cents; negative is an outflow. */
+  amount: number;
+  type?: TransactionType;
+  categoryId?: string | null;
+  payeeId?: string | null;
+  transferAccountId?: string | null;
+  notes?: string;
+  tags?: string[];
+  cleared?: boolean;
+  recurringId?: string | null;
+}
+
+export interface NewTransferInput {
+  /** Account the money leaves. */
+  fromAccountId: string;
+  /** Account the money arrives in. */
+  toAccountId: string;
+  /** Positive magnitude in cents. */
+  amount: number;
+  date: string;
+  notes?: string;
+  tags?: string[];
+  cleared?: boolean;
+}
+
+export interface NewRecurringInput {
+  accountId: string;
+  amount: number;
+  type?: TransactionType;
+  categoryId?: string | null;
+  payeeId?: string | null;
+  transferAccountId?: string | null;
+  notes?: string;
+  tags?: string[];
+  cleared?: boolean;
+  recurrence: RecurringRule['recurrence'];
+  /** First date the rule still owes. Defaults to `nextDate`. */
+  nextDate: string;
+  /** Set when the first occurrence was recorded by hand. */
+  lastGeneratedDate?: string | null;
+}
+
+interface BudgetContextValue {
   ready: boolean;
-  tasks: Task[];
+  accounts: Account[];
   categories: Category[];
-  projects: Project[];
-  places: Place[];
+  categoryGroups: CategoryGroup[];
+  payees: Payee[];
+  transactions: Transaction[];
+  budgets: Budget[];
+  recurring: RecurringRule[];
+  rules: CategorizationRule[];
   settings: Settings;
 
-  createTask: (input: NewTaskInput) => Promise<Task>;
-  updateTask: (id: string, patch: Partial<Task>) => void;
-  deleteTask: (id: string) => void;
-  /** Returns what to celebrate, or null when a task was un-completed. */
-  toggleComplete: (id: string) => CompletionOutcome | null;
-  /** Reverses a completion (used by the toast's Undo action). */
-  undoCompletion: (undo: CompletionUndo) => void;
-  duplicateTask: (id: string) => void;
-  reorderTask: (id: string, direction: -1 | 1) => void;
-  /** Ids of every descendant of a task, breadth-first. */
-  descendantIds: (id: string) => string[];
+  createAccount: (input: NewAccountInput) => Account;
+  updateAccount: (id: string, patch: Partial<Omit<Account, 'id'>>) => void;
+  deleteAccount: (id: string) => void;
+  archiveAccount: (id: string, archived?: boolean) => void;
 
-  createCategory: (name: string, color?: string) => Category;
+  createCategoryGroup: (name: string) => CategoryGroup;
+  updateCategoryGroup: (id: string, patch: Partial<Omit<CategoryGroup, 'id'>>) => void;
+  deleteCategoryGroup: (id: string) => void;
+
+  createCategory: (input: NewCategoryInput) => Category;
   updateCategory: (id: string, patch: Partial<Omit<Category, 'id'>>) => void;
   deleteCategory: (id: string) => void;
+  archiveCategory: (id: string, archived?: boolean) => void;
+  /** Deletes a category and moves its transactions to another category (or none). */
+  deleteCategoryReassign: (id: string, targetCategoryId: string | null) => void;
 
-  createProject: (name: string, options?: { color?: string; categoryId?: string | null }) => Project;
-  updateProject: (id: string, patch: Partial<Omit<Project, 'id'>>) => void;
-  deleteProject: (id: string) => void;
-  addTag: (projectId: string, name: string, color?: string) => void;
-  removeTag: (projectId: string, tagId: string) => void;
+  createPayee: (name: string, defaultCategoryId?: string | null) => Payee;
+  updatePayee: (id: string, patch: Partial<Omit<Payee, 'id'>>) => void;
+  deletePayee: (id: string) => void;
 
-  ensurePlace: (name: string) => Promise<Place>;
-  deletePlace: (id: string) => void;
+  createRule: (pattern: string, categoryId: string) => CategorizationRule;
+  deleteRule: (id: string) => void;
+
+  /** Creates an expense/income row, or both halves of a transfer. */
+  createTransaction: (input: NewTransactionInput) => Transaction;
+  updateTransaction: (id: string, patch: Partial<Omit<Transaction, 'id'>>) => void;
+  deleteTransaction: (id: string) => void;
+  /** Writes imported rows without awarding XP. Returns how many were added. */
+  importTransactions: (inputs: NewTransactionInput[]) => number;
+
+  /** Creates both linked rows of a transfer. */
+  createTransfer: (input: NewTransferInput) => { from: Transaction; to: Transaction };
+  /** Deletes both rows that share a transfer pair id. */
+  deleteTransfer: (pairId: string) => void;
+
+  /** Creates or updates the limit for one category/month. */
+  setBudget: (categoryId: string, month: string, limit: number, rollover?: boolean) => Budget;
+  deleteBudget: (id: string) => void;
+  /** Copies every limit from one month to another; returns how many were written. */
+  copyBudgets: (fromMonth: string, toMonth: string) => number;
+
+  createRecurring: (input: NewRecurringInput) => RecurringRule;
+  updateRecurring: (id: string, patch: Partial<Omit<RecurringRule, 'id'>>) => void;
+  /** Optionally removes rows this rule generated today or later. Returns how many rows went. */
+  deleteRecurring: (id: string, deleteGenerated?: boolean) => number;
+  /** Moves the rule past its next occurrence without recording it. */
+  skipRecurring: (id: string) => void;
+  /** Materialises due rows; safe to call repeatedly and on every app wake. */
+  catchUpRecurring: () => Promise<number>;
 
   updateSettings: (patch: Partial<Settings>) => void;
 
@@ -116,82 +189,156 @@ interface TaskerContextValue {
   resetEverything: () => Promise<void>;
 }
 
-const TaskerContext = createContext<TaskerContextValue | null>(null);
+const BudgetContext = createContext<BudgetContextValue | null>(null);
 
 function nextOrder(items: { order: number }[]): number {
   return items.reduce((max, item) => Math.max(max, item.order), 0) + 1;
 }
 
-/* ── Pure task-array transforms ───────────────────────────────────────────── */
-
-/**
- * Applies `patch` to one task. When the patch changes the project, the whole
- * subtree follows so a subtask can never belong to a different project than the
- * task it lives under.
- */
-function withPatch(all: Task[], id: string, patch: Partial<Task>, subtreeIds: string[]): Task[] {
-  const movingProject = patch.projectId !== undefined;
-  const target = new Set([id, ...(movingProject ? subtreeIds : [])]);
-  const now = Date.now();
-  return all.map((task) => {
-    if (!target.has(task.id)) return task;
-    if (task.id === id) return { ...task, ...patch, updatedAt: now };
-    return { ...task, projectId: patch.projectId ?? null, tags: [], updatedAt: now };
-  });
+/** Applies a patch to one entity and writes only that record. */
+function patchOne<T extends { id: string }>(
+  items: T[],
+  id: string,
+  patch: Partial<Omit<T, 'id'>>,
+  now?: number,
+): T[] {
+  return items.map((item) =>
+    item.id === id ? { ...item, ...patch, ...(now === undefined ? {} : { updatedAt: now }) } : item,
+  );
 }
 
-/** Applies the same patch to many tasks. */
-function withMany(all: Task[], ids: string[], patch: Partial<Task>): Task[] {
-  if (ids.length === 0) return all;
-  const target = new Set(ids);
-  const now = Date.now();
-  return all.map((task) => (target.has(task.id) ? { ...task, ...patch, updatedAt: now } : task));
+function transferHalves(
+  input: NewTransactionInput,
+  now: number,
+): { from: Transaction; to: Transaction } | null {
+  if (input.type !== 'transfer' || !input.transferAccountId) return null;
+  if (input.transferAccountId === input.accountId) return null;
+
+  const pairId = createId('xfer');
+  const magnitude = Math.abs(Math.round(input.amount));
+  const base = {
+    date: input.date,
+    notes: input.notes ?? '',
+    tags: input.tags ?? [],
+    cleared: input.cleared ?? false,
+    transferPairId: pairId,
+    type: 'transfer' as const,
+    categoryId: null,
+    payeeId: null,
+    recurringId: input.recurringId ?? null,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const from: Transaction = {
+    ...base,
+    id: createId('txn'),
+    accountId: input.accountId,
+    amount: -magnitude,
+    transferAccountId: input.transferAccountId,
+  };
+  const to: Transaction = {
+    ...base,
+    id: createId('txn'),
+    accountId: input.transferAccountId,
+    amount: magnitude,
+    transferAccountId: input.accountId,
+  };
+  return { from, to };
 }
 
-/** Shifts an end date by however much the start date moved. */
-function shiftRange(startISO: string, endISO: string, newStartISO: string): string {
-  const start = Date.parse(`${startISO}T00:00:00Z`);
-  const end = Date.parse(`${endISO}T00:00:00Z`);
-  const shifted = Date.parse(`${newStartISO}T00:00:00Z`) + (end - start);
-  return new Date(shifted).toISOString().slice(0, 10);
-}
-
-export function TaskerProvider({ children }: { children: ReactNode }) {
+export function BudgetProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [places, setPlaces] = useState<Place[]>([]);
+  const [categoryGroups, setCategoryGroups] = useState<CategoryGroup[]>([]);
+  const [payees, setPayees] = useState<Payee[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [recurring, setRecurring] = useState<RecurringRule[]>([]);
+  const [rules, setRules] = useState<CategorizationRule[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   // Refs mirror state so callbacks can read the latest values without being
   // re-created (and without stale closures).
-  const tasksRef = useRef(tasks);
+  const accountsRef = useRef(accounts);
   const categoriesRef = useRef(categories);
-  const projectsRef = useRef(projects);
-  const placesRef = useRef(places);
+  const categoryGroupsRef = useRef(categoryGroups);
+  const payeesRef = useRef(payees);
+  const transactionsRef = useRef(transactions);
+  const budgetsRef = useRef(budgets);
+  const recurringRef = useRef(recurring);
+  const rulesRef = useRef(rules);
   const settingsRef = useRef(settings);
-  tasksRef.current = tasks;
+  accountsRef.current = accounts;
   categoriesRef.current = categories;
-  projectsRef.current = projects;
-  placesRef.current = places;
+  categoryGroupsRef.current = categoryGroups;
+  payeesRef.current = payees;
+  transactionsRef.current = transactions;
+  budgetsRef.current = budgets;
+  recurringRef.current = recurring;
+  rulesRef.current = rules;
   settingsRef.current = settings;
+
+  /* ── Rewards ────────────────────────────────────────────────────────────── */
+
+  const persistProgress = useCallback((next: Progress) => {
+    const nextSettings: Settings = { ...settingsRef.current, progress: next };
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
+    void db.settings.put(nextSettings);
+  }, []);
+
+  const awardTransactions = useCallback(
+    (next: Progress, transactions: readonly Transaction[]): Progress => {
+      const achievements = applyAchievementUnlocks(next, {
+        progress: next,
+        accounts: accountsRef.current,
+        transactions,
+      });
+      return achievements.progress;
+    },
+    [],
+  );
+
+  const awardLogging = useCallback(
+    (transaction: Transaction, allTransactions: readonly Transaction[]) => {
+      const before = settingsRef.current.progress;
+      const reward = applyTransactionLog(before, transaction, allTransactions);
+      if (!reward) return;
+      const withAchievements = awardTransactions(reward.progress, allTransactions);
+      const unlocked = withAchievements.unlocked.filter((id) => !before.unlocked.includes(id));
+      persistProgress(withAchievements);
+      emitReward({
+        xp: withAchievements.xp - before.xp,
+        message:
+          reward.combo > 1
+            ? `${reward.combo}× combo · ${reward.streak}-day streak`
+            : `${reward.streak}-day logging streak`,
+        achievements: unlocked.map(achievementTitle),
+        leveledUp: levelForXp(withAchievements.xp) > levelForXp(before.xp),
+        level: levelForXp(withAchievements.xp),
+      });
+    },
+    [awardTransactions, persistProgress],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
-    const applySnapshot = (snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => {
-      setTasks(snapshot.tasks);
+    const applySnapshot = (snapshot: DatabaseSnapshot) => {
+      setAccounts(snapshot.accounts);
       setCategories(snapshot.categories);
-      setProjects(snapshot.projects);
-      setPlaces(snapshot.places);
+      setCategoryGroups(snapshot.categoryGroups);
+      setPayees(snapshot.payees);
+      setTransactions(snapshot.transactions);
+      setBudgets(snapshot.budgets);
+      setRecurring(snapshot.recurring);
+      setRules(snapshot.rules);
       setSettings(snapshot.settings);
     };
 
     const boot = async () => {
-      // Legacy ids are migrated once, before the first read, so sync and local
-      // data always use the same stable UUIDs.
-      await ensureUuids();
       const snapshot = await loadSnapshot();
       if (cancelled) return;
       applySnapshot(snapshot);
@@ -212,56 +359,263 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  /** Walks the subtask tree below `id`, breadth-first. */
-  const descendantIds = useCallback((id: string): string[] => {
-    const all = tasksRef.current;
-    const out: string[] = [];
-    const seen = new Set<string>([id]);
-    let frontier = [id];
-    while (frontier.length > 0) {
-      const next: string[] = [];
-      for (const parent of frontier) {
-        for (const task of all) {
-          if (task.parentId === parent && !seen.has(task.id)) {
-            seen.add(task.id);
-            out.push(task.id);
-            next.push(task.id);
-          }
+  const catchUpRunning = useRef(false);
+
+  const catchUpRecurring = useCallback(async (): Promise<number> => {
+    if (catchUpRunning.current) return 0;
+    catchUpRunning.current = true;
+    try {
+      const today = todayISO();
+      const rules = recurringRef.current;
+      if (!rules.some((rule) => rule.active)) return 0;
+
+      const existing = new Set(
+        transactionsRef.current
+          .filter((transaction) => transaction.recurringId)
+          .map((transaction) => occurrenceKey(transaction.recurringId!, transaction.date)),
+      );
+      const counts = generatedCounts(transactionsRef.current);
+      const createdAt = Date.now();
+      const created: Transaction[] = [];
+      const changedRules: RecurringRule[] = [];
+
+      for (const rule of rules) {
+        if (!rule.active || rule.type === 'transfer') continue;
+
+        const due = dueOccurrences(rule, today, counts.get(rule.id) ?? 0);
+        for (const date of due.dates) {
+          const key = occurrenceKey(rule.id, date);
+          if (existing.has(key)) continue;
+          existing.add(key);
+          created.push({
+            id: await recurringTransactionId(rule.id, date),
+            accountId: rule.accountId,
+            date,
+            amount: rule.amount,
+            type: rule.type,
+            categoryId: rule.categoryId,
+            payeeId: rule.payeeId,
+            transferAccountId: null,
+            transferPairId: null,
+            notes: rule.notes,
+            tags: rule.tags,
+            cleared: rule.cleared,
+            recurringId: rule.id,
+            createdAt,
+            updatedAt: createdAt,
+          });
+        }
+
+        const nextActive = due.exhausted ? false : rule.active;
+        if (
+          due.dates.length > 0 ||
+          due.nextDate !== rule.nextDate ||
+          due.lastGeneratedDate !== rule.lastGeneratedDate ||
+          nextActive !== rule.active
+        ) {
+          changedRules.push({
+            ...rule,
+            nextDate: due.nextDate,
+            lastGeneratedDate: due.lastGeneratedDate,
+            active: nextActive,
+            updatedAt: createdAt,
+          });
         }
       }
-      frontier = next;
+
+      if (created.length > 0) {
+        await db.transactions.putMany(created);
+        transactionsRef.current = [...created, ...transactionsRef.current];
+        setTransactions(transactionsRef.current);
+      }
+      if (changedRules.length > 0) {
+        await db.recurring.putMany(changedRules);
+        recurringRef.current = recurringRef.current.map(
+          (rule) => changedRules.find((changed) => changed.id === rule.id) ?? rule,
+        );
+        setRecurring(recurringRef.current);
+      }
+      return created.length;
+    } finally {
+      catchUpRunning.current = false;
     }
-    return out;
   }, []);
 
-  /** Applies a transform to the task list and writes only what changed. */
-  const commitTasks = useCallback((build: (all: Task[]) => Task[]) => {
-    setTasks((prev) => {
-      const next = build(prev);
-      if (next === prev) return prev;
-      const changed = next.filter((task, index) => task !== prev[index]);
-      if (changed.length > 0) void db.tasks.putMany(changed);
+  const evaluationRunning = useRef(false);
+
+  const evaluateClosedMonths = useCallback(async (): Promise<number> => {
+    if (evaluationRunning.current) return 0;
+    evaluationRunning.current = true;
+    try {
+      const transactions = transactionsRef.current;
+      const budgets = budgetsRef.current;
+      const months = closedMonths(transactions, budgets, todayISO());
+      const before = settingsRef.current.progress;
+      let progress = before;
+      let gained = 0;
+      const unlocked: string[] = [];
+
+      for (const month of months) {
+        if (progress.evaluatedMonths.includes(month)) continue;
+        const review = reviewMonth(month, transactions, categoriesRef.current, budgets);
+        const reward = applyMonthReview(progress, review);
+        if (!reward) continue;
+        const achievements = applyAchievementUnlocks(reward.progress, {
+          progress: reward.progress,
+          accounts: accountsRef.current,
+          transactions,
+        });
+        progress = achievements.progress;
+        unlocked.push(...achievements.unlocked);
+        gained += reward.xpGain + (achievements.progress.xp - reward.progress.xp);
+      }
+
+      if (gained === 0 && unlocked.length === 0) return 0;
+      persistProgress(progress);
+      emitReward({
+        xp: gained,
+        message: 'Month review complete',
+        achievements: unlocked.map(achievementTitle),
+        leveledUp: levelForXp(progress.xp) > levelForXp(before.xp),
+        level: levelForXp(progress.xp),
+      });
+      return gained;
+    } finally {
+      evaluationRunning.current = false;
+    }
+  }, [persistProgress]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const run = async () => {
+      await catchUpRecurring();
+      await evaluateClosedMonths();
+    };
+    void run();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') void run();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [ready, catchUpRecurring, evaluateClosedMonths]);
+
+  const updateSettings = useCallback((patch: Partial<Settings>) => {
+    const next = { ...settingsRef.current, ...patch };
+    settingsRef.current = next;
+    setSettings(next);
+    void db.settings.put(next);
+  }, []);
+
+  /* ── Accounts ───────────────────────────────────────────────────────────── */
+
+  const createAccount = useCallback((input: NewAccountInput): Account => {
+    const now = Date.now();
+    const account: Account = {
+      id: createId('acct'),
+      name: input.name.trim() || 'Account',
+      type: input.type ?? 'checking',
+      color: input.color ?? ACCOUNT_COLORS[accountsRef.current.length % ACCOUNT_COLORS.length],
+      openingBalance: Math.round(input.openingBalance ?? 0),
+      ...(input.currency ? { currency: input.currency } : {}),
+      archived: false,
+      order: nextOrder(accountsRef.current),
+      createdAt: now,
+      updatedAt: now,
+    };
+    setAccounts((prev) => [...prev, account]);
+    void db.accounts.put(account);
+    return account;
+  }, []);
+
+  const updateAccount = useCallback((id: string, patch: Partial<Omit<Account, 'id'>>) => {
+    setAccounts((prev) => {
+      const next = patchOne(prev, id, patch, Date.now());
+      const updated = next.find((account) => account.id === id);
+      if (updated) void db.accounts.put(updated);
       return next;
     });
   }, []);
 
-  const updateSettings = useCallback((patch: Partial<Settings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
-      void db.settings.put(next);
+  /** Archiving hides an account without touching its history. */
+  const archiveAccount = useCallback(
+    (id: string, archived = true) => updateAccount(id, { archived }),
+    [updateAccount],
+  );
+
+  const deleteAccount = useCallback((id: string) => {
+    setAccounts((prev) => prev.filter((account) => account.id !== id));
+    void db.accounts.remove(id);
+
+    // Remove the account's rows and both halves of any transfer touching it.
+    const doomed = transactionsRef.current.filter(
+      (transaction) => transaction.accountId === id || transaction.transferAccountId === id,
+    );
+    const pairIds = new Set(doomed.map((transaction) => transaction.transferPairId).filter(Boolean));
+    const ids = transactionsRef.current
+      .filter(
+        (transaction) =>
+          transaction.accountId === id ||
+          transaction.transferAccountId === id ||
+          (transaction.transferPairId !== null && pairIds.has(transaction.transferPairId)),
+      )
+      .map((transaction) => transaction.id);
+    const idSet = new Set(ids);
+    setTransactions((prev) => prev.filter((transaction) => !idSet.has(transaction.id)));
+    void db.transactions.removeMany(ids);
+  }, []);
+
+  /* ── Category groups ────────────────────────────────────────────────────── */
+
+  const createCategoryGroup = useCallback((name: string): CategoryGroup => {
+    const group: CategoryGroup = {
+      id: createId('group'),
+      name: name.trim() || 'Group',
+      order: nextOrder(categoryGroupsRef.current),
+    };
+    setCategoryGroups((prev) => [...prev, group]);
+    void db.categoryGroups.put(group);
+    return group;
+  }, []);
+
+  const updateCategoryGroup = useCallback((id: string, patch: Partial<Omit<CategoryGroup, 'id'>>) => {
+    setCategoryGroups((prev) => {
+      const next = patchOne(prev, id, patch);
+      const updated = next.find((group) => group.id === id);
+      if (updated) void db.categoryGroups.put(updated);
+      return next;
+    });
+  }, []);
+
+  const deleteCategoryGroup = useCallback((id: string) => {
+    setCategoryGroups((prev) => prev.filter((group) => group.id !== id));
+    void db.categoryGroups.remove(id);
+    setCategories((prev) => {
+      const touched = prev.filter((category) => category.groupId === id);
+      const next = prev.map((category) =>
+        category.groupId === id ? { ...category, groupId: null, updatedAt: Date.now() } : category,
+      );
+      next
+        .filter((category) => touched.some((item) => item.id === category.id))
+        .forEach((category) => void db.categories.put(category));
       return next;
     });
   }, []);
 
   /* ── Categories ─────────────────────────────────────────────────────────── */
 
-  const createCategory = useCallback((name: string, color?: string): Category => {
+  const createCategory = useCallback((input: NewCategoryInput): Category => {
+    const now = Date.now();
     const category: Category = {
       id: createId('cat'),
-      name: name.trim(),
-      color: color ?? CATEGORY_COLORS[categoriesRef.current.length % CATEGORY_COLORS.length],
+      name: input.name.trim() || 'Category',
+      kind: input.kind ?? 'expense',
+      color: input.color ?? CATEGORY_COLORS[categoriesRef.current.length % CATEGORY_COLORS.length],
+      groupId: input.groupId ?? null,
       order: nextOrder(categoriesRef.current),
-      createdAt: Date.now(),
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
     };
     setCategories((prev) => [...prev, category]);
     void db.categories.put(category);
@@ -270,7 +624,7 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
 
   const updateCategory = useCallback((id: string, patch: Partial<Omit<Category, 'id'>>) => {
     setCategories((prev) => {
-      const next = prev.map((category) => (category.id === id ? { ...category, ...patch } : category));
+      const next = patchOne(prev, id, patch, Date.now());
       const updated = next.find((category) => category.id === id);
       if (updated) void db.categories.put(updated);
       return next;
@@ -280,459 +634,589 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
   const deleteCategory = useCallback((id: string) => {
     setCategories((prev) => prev.filter((category) => category.id !== id));
     void db.categories.remove(id);
-    // Its projects survive and fall back to "Uncategorised".
-    setProjects((prev) => {
-      const touched = prev.filter((project) => project.categoryId === id);
-      const next = prev.map((project) =>
-        project.categoryId === id ? { ...project, categoryId: null } : project,
+
+    setBudgets((prev) => {
+      const doomed = prev.filter((budget) => budget.categoryId === id);
+      const next = prev.filter((budget) => budget.categoryId !== id);
+      void db.budgets.removeMany(doomed.map((budget) => budget.id));
+      return next;
+    });
+    setTransactions((prev) => {
+      const affected = prev.filter((transaction) => transaction.categoryId === id);
+      const next = prev.map((transaction) =>
+        transaction.categoryId === id
+          ? { ...transaction, categoryId: null, updatedAt: Date.now() }
+          : transaction,
       );
-      next
-        .filter((project) => touched.some((item) => item.id === project.id))
-        .forEach((project) => void db.projects.put(project));
+      affected.forEach((transaction) =>
+        void db.transactions.put({
+          ...transaction,
+          categoryId: null,
+          updatedAt: Date.now(),
+        }),
+      );
       return next;
     });
   }, []);
 
-  /* ── Projects ───────────────────────────────────────────────────────────── */
+  const archiveCategory = useCallback(
+    (id: string, archived = true) => updateCategory(id, { archived }),
+    [updateCategory],
+  );
 
-  const createProject = useCallback(
-    (name: string, options?: { color?: string; categoryId?: string | null }): Project => {
-      const project: Project = {
-        id: createId('prj'),
-        name: name.trim(),
-        color: options?.color ?? PROJECT_COLORS[projectsRef.current.length % PROJECT_COLORS.length],
-        categoryId: options?.categoryId ?? null,
-        tags: [],
-        order: nextOrder(projectsRef.current),
-        createdAt: Date.now(),
+  /**
+   * Deletes a category after moving its transactions to another category (or
+   * to Uncategorized). Budgets for the deleted category are removed.
+   */
+  const deleteCategoryReassign = useCallback((id: string, targetCategoryId: string | null) => {
+    setCategories((prev) => prev.filter((category) => category.id !== id));
+    void db.categories.remove(id);
+
+    setBudgets((prev) => {
+      const doomed = prev.filter((budget) => budget.categoryId === id);
+      if (doomed.length > 0) void db.budgets.removeMany(doomed.map((budget) => budget.id));
+      return prev.filter((budget) => budget.categoryId !== id);
+    });
+
+    setTransactions((prev) => {
+      const now = Date.now();
+      const moved = prev
+        .filter((transaction) => transaction.categoryId === id)
+        .map((transaction) => ({ ...transaction, categoryId: targetCategoryId, updatedAt: now }));
+      if (moved.length > 0) void db.transactions.putMany(moved);
+      return prev.map((transaction) =>
+        transaction.categoryId === id
+          ? { ...transaction, categoryId: targetCategoryId, updatedAt: now }
+          : transaction,
+      );
+    });
+  }, []);
+
+  /* ── Payees ─────────────────────────────────────────────────────────────── */
+
+  const createPayee = useCallback((name: string, defaultCategoryId: string | null = null): Payee => {
+    const payee: Payee = {
+      id: createId('payee'),
+      name: name.trim() || 'Payee',
+      defaultCategoryId,
+      createdAt: Date.now(),
+    };
+    setPayees((prev) => [...prev, payee]);
+    void db.payees.put(payee);
+    return payee;
+  }, []);
+
+  const updatePayee = useCallback((id: string, patch: Partial<Omit<Payee, 'id'>>) => {
+    setPayees((prev) => {
+      const next = patchOne(prev, id, patch);
+      const updated = next.find((payee) => payee.id === id);
+      if (updated) void db.payees.put(updated);
+      return next;
+    });
+  }, []);
+
+  const deletePayee = useCallback((id: string) => {
+    setPayees((prev) => prev.filter((payee) => payee.id !== id));
+    void db.payees.remove(id);
+    setTransactions((prev) => {
+      const affected = prev.filter((transaction) => transaction.payeeId === id);
+      const next = prev.map((transaction) =>
+        transaction.payeeId === id
+          ? { ...transaction, payeeId: null, updatedAt: Date.now() }
+          : transaction,
+      );
+      affected.forEach((transaction) =>
+        void db.transactions.put({ ...transaction, payeeId: null, updatedAt: Date.now() }),
+      );
+      return next;
+    });
+  }, []);
+
+  /* ── Categorization rules ───────────────────────────────────────────────── */
+
+  const createRule = useCallback((pattern: string, categoryId: string): CategorizationRule => {
+    const now = Date.now();
+    const rule: CategorizationRule = {
+      id: createId('rule'),
+      pattern: pattern.trim(),
+      categoryId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const next = [...rulesRef.current, rule];
+    rulesRef.current = next;
+    setRules(next);
+    void db.rules.put(rule);
+    return rule;
+  }, []);
+
+  const deleteRule = useCallback((id: string) => {
+    const next = rulesRef.current.filter((rule) => rule.id !== id);
+    rulesRef.current = next;
+    setRules(next);
+    void db.rules.remove(id);
+  }, []);
+
+  /* ── Transactions ───────────────────────────────────────────────────────── */
+
+  const createTransaction = useCallback((input: NewTransactionInput): Transaction => {
+    const now = Date.now();
+    const pair = transferHalves(input, now);
+
+    if (pair) {
+      setTransactions((prev) => [...prev, pair.from, pair.to]);
+      void db.transactions.putTransferPair(pair.from, pair.to);
+      return pair.from;
+    }
+
+    const amount = Math.round(input.amount);
+    const transaction: Transaction = {
+      id: createId('txn'),
+      accountId: input.accountId,
+      date: input.date,
+      amount,
+      type: input.type === 'transfer' ? 'expense' : input.type ?? (amount >= 0 ? 'income' : 'expense'),
+      categoryId: input.categoryId ?? null,
+      payeeId: input.payeeId ?? null,
+      transferAccountId: null,
+      transferPairId: null,
+      notes: input.notes ?? '',
+      tags: input.tags ?? [],
+      cleared: input.cleared ?? false,
+      recurringId: input.recurringId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const next = [transaction, ...transactionsRef.current];
+    transactionsRef.current = next;
+    setTransactions(next);
+    void db.transactions.put(transaction);
+    awardLogging(transaction, next);
+    return transaction;
+  }, [awardLogging]);
+
+  const importTransactions = useCallback((inputs: NewTransactionInput[]): number => {
+    if (inputs.length === 0) return 0;
+    const now = Date.now();
+    const created: Transaction[] = inputs.map((input) => {
+      const amount = Math.round(input.amount);
+      return {
+        id: createId('txn'),
+        accountId: input.accountId,
+        date: input.date,
+        amount,
+        type: input.type ?? (amount >= 0 ? 'income' : 'expense'),
+        categoryId: input.categoryId ?? null,
+        payeeId: input.payeeId ?? null,
+        transferAccountId: null,
+        transferPairId: null,
+        notes: input.notes ?? '',
+        tags: input.tags ?? [],
+        cleared: input.cleared ?? false,
+        recurringId: null,
+        createdAt: now,
+        updatedAt: now,
       };
-      setProjects((prev) => [...prev, project]);
-      void db.projects.put(project);
-      return project;
+    });
+    const next = [...created, ...transactionsRef.current];
+    transactionsRef.current = next;
+    setTransactions(next);
+    void db.transactions.putMany(created);
+    return created.length;
+  }, []);
+
+  const updateTransaction = useCallback((id: string, patch: Partial<Omit<Transaction, 'id'>>) => {
+    const target = transactionsRef.current.find((transaction) => transaction.id === id);
+    const reconciling =
+      patch.cleared === true && !!target && !target.cleared && target.type !== 'transfer';
+
+    setTransactions((prev) => {
+      const current = prev.find((transaction) => transaction.id === id);
+      if (!current) return prev;
+
+      const now = Date.now();
+      const next = patchOne(prev, id, patch, now);
+      const updated = next.find((transaction) => transaction.id === id);
+      if (updated) void db.transactions.put(updated);
+
+      // Keep the other half of a transfer in step when the shared fields change.
+      if (current.type === 'transfer' && current.transferPairId) {
+        const partner = next.find(
+          (transaction) =>
+            transaction.transferPairId === current.transferPairId &&
+            transaction.id !== current.id,
+        );
+        if (partner) {
+          const partnerPatch: Partial<Transaction> = { updatedAt: now };
+          if (patch.amount !== undefined) partnerPatch.amount = -Math.abs(updated?.amount ?? 0);
+          if (patch.date !== undefined) partnerPatch.date = patch.date;
+          if (patch.notes !== undefined) partnerPatch.notes = patch.notes;
+          if (patch.tags !== undefined) partnerPatch.tags = patch.tags;
+          if (patch.cleared !== undefined) partnerPatch.cleared = patch.cleared;
+          const updatedPartner = { ...partner, ...partnerPatch };
+          void db.transactions.put(updatedPartner);
+          return next.map((transaction) =>
+            transaction.id === partner.id ? updatedPartner : transaction,
+          );
+        }
+      }
+
+      return next;
+    });
+
+    if (reconciling && target) {
+      const before = settingsRef.current.progress;
+      const reward = applyReconciliation(before, target);
+      if (reward) {
+        const cleared = transactionsRef.current.map((transaction) =>
+          transaction.id === target.id ? { ...transaction, cleared: true } : transaction,
+        );
+        const withAchievements = applyAchievementUnlocks(reward.progress, {
+          progress: reward.progress,
+          accounts: accountsRef.current,
+          transactions: cleared,
+        });
+        persistProgress(withAchievements.progress);
+        emitReward({
+          xp: withAchievements.progress.xp - before.xp,
+          message: 'Transaction reconciled',
+          achievements: withAchievements.unlocked.map(achievementTitle),
+          leveledUp: levelForXp(withAchievements.progress.xp) > levelForXp(before.xp),
+          level: levelForXp(withAchievements.progress.xp),
+        });
+      }
+    }
+  }, [persistProgress]);
+
+  const deleteTransaction = useCallback((id: string) => {
+    const target = transactionsRef.current.find((transaction) => transaction.id === id);
+    const ids = target?.transferPairId
+      ? transactionsRef.current
+          .filter((transaction) => transaction.transferPairId === target.transferPairId)
+          .map((transaction) => transaction.id)
+      : [id];
+    const idSet = new Set(ids);
+    setTransactions((prev) => prev.filter((transaction) => !idSet.has(transaction.id)));
+    void db.transactions.removeMany(ids);
+  }, []);
+
+  const createTransfer = useCallback((input: NewTransferInput) => {
+    const pair = transferHalves(
+      {
+        accountId: input.fromAccountId,
+        transferAccountId: input.toAccountId,
+        amount: Math.abs(Math.round(input.amount)),
+        date: input.date,
+        type: 'transfer',
+        notes: input.notes ?? '',
+        tags: input.tags ?? [],
+        cleared: input.cleared ?? false,
+      },
+      Date.now(),
+    );
+    if (!pair) throw new Error('Choose two different accounts for a transfer.');
+    setTransactions((prev) => [pair.from, ...prev, pair.to]);
+    void db.transactions.putTransferPair(pair.from, pair.to);
+    return pair;
+  }, []);
+
+  const deleteTransfer = useCallback((pairId: string) => {
+    const ids = transactionsRef.current
+      .filter((transaction) => transaction.transferPairId === pairId)
+      .map((transaction) => transaction.id);
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setTransactions((prev) => prev.filter((transaction) => !idSet.has(transaction.id)));
+    void db.transactions.removeMany(ids);
+  }, []);
+
+  /* ── Budgets ────────────────────────────────────────────────────────────── */
+
+  const setBudget = useCallback(
+    (categoryId: string, month: string, limit: number, rollover?: boolean): Budget => {
+      const existing = budgetsRef.current.find(
+        (budget) => budget.categoryId === categoryId && budget.month === month,
+      );
+      const now = Date.now();
+      const amount = Math.max(0, Math.round(limit));
+
+      if (existing) {
+        const updated: Budget = {
+          ...existing,
+          limit: amount,
+          rollover: rollover ?? existing.rollover,
+          updatedAt: now,
+        };
+        setBudgets((prev) => prev.map((budget) => (budget.id === existing.id ? updated : budget)));
+        void db.budgets.put(updated);
+        return updated;
+      }
+
+      const budget: Budget = {
+        id: createId('budget'),
+        categoryId,
+        month,
+        limit: amount,
+        rollover: rollover ?? false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      setBudgets((prev) => [...prev, budget]);
+      void db.budgets.put(budget);
+      return budget;
     },
     [],
   );
 
-  const ensureProjectByName = useCallback(
-    (name: string, categoryId?: string | null): Project | null => {
-      const trimmed = name.trim();
-      if (!trimmed) return null;
-      const existing = projectsRef.current.find(
-        (project) => project.name.toLowerCase() === trimmed.toLowerCase(),
-      );
-      if (existing) return existing;
-      return createProject(trimmed, { categoryId: categoryId ?? null });
-    },
-    [createProject],
-  );
+  const copyBudgets = useCallback((fromMonth: string, toMonth: string): number => {
+    if (fromMonth === toMonth) return 0;
 
-  const updateProject = useCallback((id: string, patch: Partial<Omit<Project, 'id'>>) => {
-    setProjects((prev) => {
-      const next = prev.map((project) => (project.id === id ? { ...project, ...patch } : project));
-      const updated = next.find((project) => project.id === id);
-      if (updated) void db.projects.put(updated);
-      return next;
-    });
-  }, []);
+    const source = budgetsRef.current.filter((budget) => budget.month === fromMonth);
+    if (source.length === 0) return 0;
 
-  const deleteProject = useCallback((id: string) => {
-    setProjects((prev) => prev.filter((project) => project.id !== id));
-    void db.projects.remove(id);
-    setTasks((prev) => {
-      const touched = prev.filter((task) => task.projectId === id);
-      const next = prev.map((task) =>
-        task.projectId === id ? { ...task, projectId: null, tags: [] } : task,
-      );
-      next
-        .filter((task) => touched.some((item) => item.id === task.id))
-        .forEach((task) => void db.tasks.put(task));
-      return next;
-    });
-  }, []);
+    const existing = new Map(
+      budgetsRef.current
+        .filter((budget) => budget.month === toMonth)
+        .map((budget) => [budget.categoryId, budget]),
+    );
+    const now = Date.now();
+    const written: Budget[] = [];
+    const created: Budget[] = [];
 
-  const addTag = useCallback((projectId: string, name: string, color?: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setProjects((prev) => {
-      const next = prev.map((project) => {
-        if (project.id !== projectId) return project;
-        if (project.tags.some((tag) => tag.name.toLowerCase() === trimmed.toLowerCase())) return project;
-        const tag: Tag = {
-          id: createId('tag'),
-          name: trimmed,
-          color: color ?? PROJECT_COLORS[project.tags.length % PROJECT_COLORS.length],
+    for (const budget of source) {
+      const match = existing.get(budget.categoryId);
+      if (match) {
+        const updated: Budget = {
+          ...match,
+          limit: budget.limit,
+          rollover: budget.rollover,
+          updatedAt: now,
         };
-        return { ...project, tags: [...project.tags, tag] };
-      });
-      const updated = next.find((project) => project.id === projectId);
-      if (updated) void db.projects.put(updated);
-      return next;
-    });
-  }, []);
-
-  const removeTag = useCallback((projectId: string, tagId: string) => {
-    setProjects((prev) => {
-      const removed = prev.find((project) => project.id === projectId)?.tags.find((tag) => tag.id === tagId);
-      const next = prev.map((project) =>
-        project.id === projectId
-          ? { ...project, tags: project.tags.filter((tag) => tag.id !== tagId) }
-          : project,
-      );
-      const updated = next.find((project) => project.id === projectId);
-      if (updated) void db.projects.put(updated);
-
-      if (removed) {
-        setTasks((current) => {
-          const affected = new Set(
-            current
-              .filter((task) => task.projectId === projectId && task.tags.includes(removed.name))
-              .map((task) => task.id),
-          );
-          if (affected.size === 0) return current;
-          const patched = current.map((task) =>
-            affected.has(task.id)
-              ? { ...task, tags: task.tags.filter((name) => name !== removed.name), updatedAt: Date.now() }
-              : task,
-          );
-          patched.filter((task) => affected.has(task.id)).forEach((task) => void db.tasks.put(task));
-          return patched;
-        });
-      }
-      return next;
-    });
-  }, []);
-
-  /* ── Places ─────────────────────────────────────────────────────────────── */
-
-  const ensurePlace = useCallback(async (name: string): Promise<Place> => {
-    const trimmed = name.trim();
-    const existing = placesRef.current.find((place) => place.name.toLowerCase() === trimmed.toLowerCase());
-    if (existing) return existing;
-    const place: Place = { id: createId('plc'), name: trimmed, createdAt: Date.now() };
-    setPlaces((prev) => [...prev, place]);
-    await db.places.put(place);
-    return place;
-  }, []);
-
-  const deletePlace = useCallback((id: string) => {
-    setPlaces((prev) => prev.filter((place) => place.id !== id));
-    void db.places.remove(id);
-  }, []);
-
-  /* ── Tasks ──────────────────────────────────────────────────────────────── */
-
-  const resolveProjectId = useCallback(
-    (input: NewTaskInput, inheritedProjectId: string | null): string | null => {
-      if (input.projectId) return input.projectId;
-      // A subtask inherits its parent's project unless told otherwise.
-      if (inheritedProjectId) return inheritedProjectId;
-
-      let categoryId: string | null = null;
-      if (input.categoryName) {
-        const trimmed = input.categoryName.trim();
-        const existing =
-          categoriesRef.current.find((category) => category.name.toLowerCase() === trimmed.toLowerCase()) ??
-          createCategory(trimmed);
-        categoryId = existing.id;
-      }
-
-      if (input.projectName) {
-        const project = ensureProjectByName(input.projectName, categoryId);
-        if (project) return project.id;
-      }
-
-      // A category on its own resolves to its only project, if it has one.
-      if (categoryId) {
-        const owned = projectsRef.current.filter((project) => project.categoryId === categoryId);
-        if (owned.length === 1) return owned[0].id;
-      }
-
-      return settingsRef.current.defaultProjectId;
-    },
-    [createCategory, ensureProjectByName],
-  );
-
-  const createTask = useCallback(
-    async (input: NewTaskInput): Promise<Task> => {
-      const parent = input.parentId ? tasksRef.current.find((task) => task.id === input.parentId) : null;
-      const projectId = resolveProjectId(input, parent?.projectId ?? null);
-
-      const allDay = input.allDay ?? !input.time;
-      const now = Date.now();
-      const date = input.date ?? null;
-      const endDate = input.endDate && date && input.endDate > date ? input.endDate : date;
-
-      const task: Task = {
-        id: createId('tsk'),
-        title: input.title.trim() || 'Untitled task',
-        notes: input.notes ?? '',
-        projectId,
-        parentId: input.parentId ?? null,
-        place: input.place ?? null,
-        priority: input.priority ?? 4,
-        date,
-        time: allDay ? null : input.time ?? null,
-        endDate,
-        endTime: allDay ? null : input.endTime ?? null,
-        allDay,
-        tags: input.tags ?? [],
-        lane: input.lane ?? '',
-        recurrence: input.recurrence ?? null,
-        completed: false,
-        completedAt: null,
-        seriesId: createId('ser'),
-        order: nextOrder(tasksRef.current),
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      setTasks((prev) => [...prev, task]);
-      await db.tasks.put(task);
-      if (task.place) await ensurePlace(task.place);
-      return task;
-    },
-    [ensurePlace, resolveProjectId],
-  );
-
-  const updateTask = useCallback(
-    (id: string, patch: Partial<Task>) => {
-      const subtree = patch.projectId !== undefined ? descendantIds(id) : [];
-      commitTasks((all) => withPatch(all, id, patch, subtree));
-    },
-    [commitTasks, descendantIds],
-  );
-
-  const deleteTask = useCallback(
-    (id: string) => {
-      const ids = [id, ...descendantIds(id)];
-      const doomed = new Set(ids);
-      setTasks((prev) => prev.filter((task) => !doomed.has(task.id)));
-      void db.tasks.removeMany(ids);
-    },
-    [descendantIds],
-  );
-
-  const duplicateTask = useCallback((id: string) => {
-    const task = tasksRef.current.find((item) => item.id === id);
-    if (!task) return;
-    const copy: Task = {
-      ...task,
-      id: createId('tsk'),
-      title: `${task.title} (copy)`,
-      completed: false,
-      completedAt: null,
-      seriesId: createId('ser'),
-      order: nextOrder(tasksRef.current),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    setTasks((prev) => [...prev, copy]);
-    void db.tasks.put(copy);
-  }, []);
-
-  const toggleComplete = useCallback(
-    (id: string): CompletionOutcome | null => {
-      const task = tasksRef.current.find((item) => item.id === id);
-      if (!task) return null;
-
-      const all = tasksRef.current;
-      const descendants = descendantIds(id);
-      const now = Date.now();
-
-      if (task.completed) {
-        commitTasks((current) => withPatch(current, id, { completed: false, completedAt: null }, []));
-        return null;
-      }
-
-      // A checklist is "cleared" when this tick finishes the last item of a
-      // parent — that earns the bonus and its own celebration.
-      let clearedParentId: string | null = null;
-      if (task.parentId) {
-        const siblings = all.filter((item) => item.parentId === task.parentId && item.id !== id);
-        if (siblings.length > 0 && siblings.every((item) => item.completed)) clearedParentId = task.parentId;
+        written.push(updated);
+        existing.set(budget.categoryId, updated);
       } else {
-        const children = all.filter((item) => item.parentId === id);
-        if (children.length > 0 && children.every((item) => item.completed)) clearedParentId = id;
+        const fresh: Budget = {
+          id: createId('budget'),
+          categoryId: budget.categoryId,
+          month: toMonth,
+          limit: budget.limit,
+          rollover: budget.rollover,
+          createdAt: now,
+          updatedAt: now,
+        };
+        written.push(fresh);
+        created.push(fresh);
+        existing.set(budget.categoryId, fresh);
       }
+    }
 
-      // Recurring tasks roll forward: the checklist moves to the new occurrence
-      // instead of being completed, and undo would be ambiguous.
-      const recurring = Boolean(task.recurrence && task.date);
-      const occurrences = recurring ? all.filter((item) => item.seriesId === task.seriesId).length : 0;
-      const nextDate = recurring ? nextOccurrence(task.recurrence!, task.date!) : null;
-      const exhausted = recurring && nextDate ? isExhausted(task.recurrence!, nextDate, occurrences) : false;
-      const rollsOver = Boolean(recurring && nextDate && !exhausted);
-
-      const completedAlongside = rollsOver ? [] : descendants;
-      const outcome = applyCompletion(
-        settingsRef.current.progress,
-        task,
-        clearedParentId,
-        completedAlongside,
-        now,
-      );
-      updateSettings({ progress: outcome.progress });
-
-      const done = { completed: true, completedAt: now };
-
-      if (recurring && nextDate) {
-        commitTasks((current) => {
-          let next = withPatch(current, id, done, []);
-          if (exhausted) return withMany(next, descendants, done);
-
-          const occurrence: Task = {
-            ...task,
-            id: createId('tsk'),
-            date: nextDate,
-            endDate: task.endDate ? shiftRange(task.date!, task.endDate, nextDate) : nextDate,
-            completed: false,
-            completedAt: null,
-            order: nextOrder(all),
-            createdAt: now,
-            updatedAt: now,
-          };
-
-          // The checklist moves onto the fresh occurrence and resets.
-          next = next.map((item) => {
-            if (!descendants.includes(item.id)) return item;
-            return {
-              ...item,
-              parentId: item.parentId === id ? occurrence.id : item.parentId,
-              completed: false,
-              completedAt: null,
-              updatedAt: now,
-            };
-          });
-
-          return [...next, occurrence];
-        });
-
-        return rollsOver ? { ...outcome, undo: null } : outcome;
-      }
-
-      // Completing a parent completes its whole subtree.
-      commitTasks((current) => withMany(withPatch(current, id, done, []), descendants, done));
-      return outcome;
-    },
-    [commitTasks, descendantIds, updateSettings],
-  );
-
-  /** One-tap reversal offered by the completion toast. */
-  const undoCompletion = useCallback(
-    (undo: CompletionUndo) => {
-      const ids = [undo.taskId, ...undo.alsoCompletedIds];
-      commitTasks((current) =>
-        withMany(current, ids, { completed: false, completedAt: null }),
-      );
-      updateSettings({ progress: revertCompletion(settingsRef.current.progress, undo) });
-    },
-    [commitTasks, updateSettings],
-  );
-
-  const reorderTask = useCallback((id: string, direction: -1 | 1) => {
-    commitTasks((all) => {
-      const sorted = [...all].sort((a, b) => a.order - b.order);
-      const index = sorted.findIndex((task) => task.id === id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= sorted.length) return all;
-      const first = sorted[index];
-      const second = sorted[target];
-      const firstOrder = first.order;
-      return all.map((task) => {
-        if (task.id === first.id) return { ...task, order: second.order, updatedAt: Date.now() };
-        if (task.id === second.id) return { ...task, order: firstOrder, updatedAt: Date.now() };
-        return task;
+    if (created.length > 0 || written.length > 0) {
+      const byId = new Map(written.map((budget) => [budget.id, budget]));
+      setBudgets((prev) => {
+        const next = prev.map((budget) => byId.get(budget.id) ?? budget);
+        return [...next, ...created.filter((budget) => !prev.some((item) => item.id === budget.id))];
       });
+    }
+    void db.budgets.putMany(written);
+    return written.length;
+  }, []);
+
+  const deleteBudget = useCallback((id: string) => {
+    setBudgets((prev) => prev.filter((budget) => budget.id !== id));
+    void db.budgets.remove(id);
+  }, []);
+
+  /* ── Recurring rules ────────────────────────────────────────────────────── */
+
+  const createRecurring = useCallback((input: NewRecurringInput): RecurringRule => {
+    const now = Date.now();
+    const rule: RecurringRule = {
+      id: createId('recur'),
+      accountId: input.accountId,
+      amount: Math.round(input.amount),
+      type: input.type ?? (input.amount >= 0 ? 'income' : 'expense'),
+      categoryId: input.categoryId ?? null,
+      payeeId: input.payeeId ?? null,
+      transferAccountId: input.transferAccountId ?? null,
+      notes: input.notes ?? '',
+      tags: input.tags ?? [],
+      cleared: input.cleared ?? false,
+      recurrence: input.recurrence,
+      nextDate: input.nextDate,
+      lastGeneratedDate: input.lastGeneratedDate ?? null,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setRecurring((prev) => [...prev, rule]);
+    void db.recurring.put(rule);
+    return rule;
+  }, []);
+
+  const updateRecurring = useCallback((id: string, patch: Partial<Omit<RecurringRule, 'id'>>) => {
+    setRecurring((prev) => {
+      const next = patchOne(prev, id, patch, Date.now());
+      const updated = next.find((rule) => rule.id === id);
+      if (updated) void db.recurring.put(updated);
+      return next;
     });
-  }, [commitTasks]);
+  }, []);
+
+  const deleteRecurring = useCallback((id: string, deleteGenerated = false): number => {
+    let removed = 0;
+
+    if (deleteGenerated) {
+      const today = todayISO();
+      const ids = new Set(
+        transactionsRef.current
+          .filter((transaction) => transaction.recurringId === id && transaction.date >= today)
+          .map((transaction) => transaction.id),
+      );
+      if (ids.size > 0) {
+        setTransactions((prev) => prev.filter((transaction) => !ids.has(transaction.id)));
+        void db.transactions.removeMany([...ids]);
+        removed = ids.size;
+      }
+    }
+
+    setRecurring((prev) => prev.filter((rule) => rule.id !== id));
+    void db.recurring.remove(id);
+    return removed;
+  }, []);
+
+  const skipRecurring = useCallback((id: string) => {
+    setRecurring((prev) =>
+      prev.map((rule) => {
+        if (rule.id !== id) return rule;
+        const nextDate = nextOccurrence(rule.recurrence, rule.nextDate);
+        const ended = rule.recurrence.until !== null && nextDate > rule.recurrence.until;
+        const updated: RecurringRule = {
+          ...rule,
+          nextDate,
+          active: ended ? false : rule.active,
+          updatedAt: Date.now(),
+        };
+        void db.recurring.put(updated);
+        return updated;
+      }),
+    );
+  }, []);
 
   /* ── Data portability ───────────────────────────────────────────────────── */
 
   const buildBackup = useCallback(
     (): BackupFile => ({
-      app: 'tasker',
+      app: 'budget',
       version: BACKUP_VERSION,
       exportedAt: new Date().toISOString(),
+      accounts: accountsRef.current,
       categories: categoriesRef.current,
-      projects: projectsRef.current,
-      places: placesRef.current,
-      tasks: tasksRef.current,
+      categoryGroups: categoryGroupsRef.current,
+      payees: payeesRef.current,
+      transactions: transactionsRef.current,
+      budgets: budgetsRef.current,
+      recurring: recurringRef.current,
+      rules: rulesRef.current,
       settings: settingsRef.current,
     }),
     [],
   );
 
   const restoreBackup = useCallback(async (backup: BackupFile) => {
-    if (!backup || backup.app !== 'tasker' || !Array.isArray(backup.tasks)) {
-      throw new Error('This file is not a Tasker backup.');
+    const app = (backup as { app?: unknown } | null)?.app;
+    if (
+      !backup ||
+      app !== 'budget' ||
+      !Array.isArray(backup.accounts) ||
+      !Array.isArray(backup.transactions)
+    ) {
+      throw new Error('This file is not a Budget backup.');
     }
     if (await getSyncInfo()) {
       throw new Error('Disconnect sync before restoring a backup.');
     }
     await clearAll();
 
-    const restoredCategories = backup.categories ?? [];
-    const restoredProjects = backup.projects ?? [];
-    const restoredPlaces = backup.places ?? [];
-    const restoredTasks = backup.tasks ?? [];
-    // v1/v2 backups may still carry reminder settings; normalizeSettings drops
-    // the retired keys so they never reach the v3 store.
-    const restoredSettings = normalizeSettings(backup.settings);
+    await db.accounts.putMany(backup.accounts ?? []);
+    await db.categoryGroups.putMany(backup.categoryGroups ?? []);
+    await db.categories.putMany(backup.categories ?? []);
+    await db.payees.putMany(backup.payees ?? []);
+    await db.transactions.putMany(backup.transactions ?? []);
+    await db.budgets.putMany(backup.budgets ?? []);
+    await db.recurring.putMany(backup.recurring ?? []);
+    await db.rules.putMany(backup.rules ?? []);
+    await db.settings.put(normalizeSettings(backup.settings));
 
-    await db.categories.putMany(restoredCategories);
-    await db.projects.putMany(restoredProjects);
-    await db.places.putMany(restoredPlaces);
-    await db.tasks.putMany(restoredTasks);
-    await db.settings.put(restoredSettings);
-
-    // Imports may still carry legacy string ids; migrate them to UUIDs and read
-    // the rewritten rows back so state matches IndexedDB exactly.
-    await resetUuidMigration();
-    await ensureUuids();
     const snapshot = await loadSnapshot();
+    setAccounts(snapshot.accounts);
     setCategories(snapshot.categories);
-    setProjects(snapshot.projects);
-    setPlaces(snapshot.places);
-    setTasks(snapshot.tasks);
+    setCategoryGroups(snapshot.categoryGroups);
+    setPayees(snapshot.payees);
+    setTransactions(snapshot.transactions);
+    setBudgets(snapshot.budgets);
+    setRecurring(snapshot.recurring);
+    setRules(snapshot.rules);
     setSettings(snapshot.settings);
   }, []);
 
   const resetEverything = useCallback(async () => {
     await disconnectSync();
     await clearAll();
+    setAccounts([]);
     setCategories([]);
-    setProjects([]);
-    setPlaces([]);
-    setTasks([]);
+    setCategoryGroups([]);
+    setPayees([]);
+    setTransactions([]);
+    setBudgets([]);
+    setRecurring([]);
+    setRules([]);
     setSettings({ ...DEFAULT_SETTINGS });
   }, []);
 
-  const value = useMemo<TaskerContextValue>(
+  const value = useMemo<BudgetContextValue>(
     () => ({
       ready,
-      tasks,
+      accounts,
       categories,
-      projects,
-      places,
+      categoryGroups,
+      payees,
+      transactions,
+      budgets,
+      recurring,
+      rules,
       settings,
-      createTask,
-      updateTask,
-      deleteTask,
-      toggleComplete,
-      undoCompletion,
-      duplicateTask,
-      reorderTask,
-      descendantIds,
+      createAccount,
+      updateAccount,
+      deleteAccount,
+      archiveAccount,
+      createCategoryGroup,
+      updateCategoryGroup,
+      deleteCategoryGroup,
       createCategory,
       updateCategory,
       deleteCategory,
-      createProject,
-      updateProject,
-      deleteProject,
-      addTag,
-      removeTag,
-      ensurePlace,
-      deletePlace,
+      archiveCategory,
+      deleteCategoryReassign,
+      createPayee,
+      updatePayee,
+      deletePayee,
+      createRule,
+      deleteRule,
+      createTransaction,
+      updateTransaction,
+      deleteTransaction,
+      importTransactions,
+      createTransfer,
+      deleteTransfer,
+      setBudget,
+      deleteBudget,
+      copyBudgets,
+      createRecurring,
+      updateRecurring,
+      deleteRecurring,
+      skipRecurring,
+      catchUpRecurring,
       updateSettings,
       buildBackup,
       restoreBackup,
@@ -740,29 +1224,46 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     }),
     [
       ready,
-      tasks,
+      accounts,
       categories,
-      projects,
-      places,
+      categoryGroups,
+      payees,
+      transactions,
+      budgets,
+      recurring,
+      rules,
       settings,
-      createTask,
-      updateTask,
-      deleteTask,
-      toggleComplete,
-      undoCompletion,
-      duplicateTask,
-      reorderTask,
-      descendantIds,
+      createAccount,
+      updateAccount,
+      deleteAccount,
+      archiveAccount,
+      createCategoryGroup,
+      updateCategoryGroup,
+      deleteCategoryGroup,
       createCategory,
       updateCategory,
       deleteCategory,
-      createProject,
-      updateProject,
-      deleteProject,
-      addTag,
-      removeTag,
-      ensurePlace,
-      deletePlace,
+      archiveCategory,
+      deleteCategoryReassign,
+      createPayee,
+      updatePayee,
+      deletePayee,
+      createRule,
+      deleteRule,
+      createTransaction,
+      updateTransaction,
+      deleteTransaction,
+      importTransactions,
+      createTransfer,
+      deleteTransfer,
+      setBudget,
+      deleteBudget,
+      copyBudgets,
+      createRecurring,
+      updateRecurring,
+      deleteRecurring,
+      skipRecurring,
+      catchUpRecurring,
       updateSettings,
       buildBackup,
       restoreBackup,
@@ -770,33 +1271,11 @@ export function TaskerProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <TaskerContext.Provider value={value}>{children}</TaskerContext.Provider>;
+  return <BudgetContext.Provider value={value}>{children}</BudgetContext.Provider>;
 }
 
-export function useTasker(): TaskerContextValue {
-  const context = useContext(TaskerContext);
-  if (!context) throw new Error('useTasker must be used inside <TaskerProvider>.');
+export function useBudget(): BudgetContextValue {
+  const context = useContext(BudgetContext);
+  if (!context) throw new Error('useBudget must be used inside <BudgetProvider>.');
   return context;
-}
-
-/** Convenience selectors shared by the views. */
-export function useProjectMap(): Map<string, Project> {
-  const { projects } = useTasker();
-  return useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
-}
-
-/** Tasks bucketed by parent id, so nested rendering is a single lookup. */
-export function useTaskChildren(): Map<string, Task[]> {
-  const { tasks } = useTasker();
-  return useMemo(() => {
-    const map = new Map<string, Task[]>();
-    for (const task of tasks) {
-      if (!task.parentId) continue;
-      const bucket = map.get(task.parentId) ?? [];
-      bucket.push(task);
-      map.set(task.parentId, bucket);
-    }
-    for (const bucket of map.values()) bucket.sort((a, b) => a.order - b.order);
-    return map;
-  }, [tasks]);
 }

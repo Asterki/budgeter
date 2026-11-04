@@ -13,9 +13,15 @@ import {
   deleteEntitySilently,
   getVersion,
   listOutbox,
-  normalizeProject,
+  normalizeAccount,
+  normalizeBudget,
+  normalizeCategory,
+  normalizeCategoryGroup,
+  normalizeCategoryRule,
+  normalizePayee,
+  normalizeRecurring,
   normalizeSettings,
-  normalizeTask,
+  normalizeTransaction,
   putOutbox,
   putVersion,
   readEntity,
@@ -26,10 +32,18 @@ import {
   type EntityKind,
   type OutboxRecord,
 } from '../db/database';
-import type { Place, Project, Settings, Task } from '../domain/types';
+import type { Settings, Transaction } from '../domain/types';
 import { mergeProgress } from '../domain/progress';
 import { decryptPayload, deriveKeys, encryptPayload } from './crypto';
 import { compareHlc, epochHlc, HlcClock } from './hlc';
+import {
+  IncompatibleSyncSpaceError,
+  LEGACY_ENTITY_TYPES,
+  PROTOCOL_HEADER,
+  SCHEMA_HEADER,
+  SYNC_PROTOCOL_VERSION,
+  SYNC_SCHEMA_VERSION,
+} from './protocol';
 import { configureRecorder, entityPayload } from './recorder';
 import {
   NewSyncSpaceError,
@@ -42,7 +56,17 @@ import {
   type SyncStatus,
 } from './types';
 
-const ENTITY_KINDS: EntityKind[] = ['task', 'category', 'project', 'place', 'settings'];
+const ENTITY_KINDS: EntityKind[] = [
+  'account',
+  'category',
+  'categoryGroup',
+  'payee',
+  'transaction',
+  'budget',
+  'recurring',
+  'rule',
+  'settings',
+];
 const BATCH = 200;
 const POLL_MS = 20_000;
 const TIMEOUT_MS = 20_000;
@@ -122,6 +146,8 @@ async function request<T>(
   const timer = window.setTimeout(() => controller.abort(), TIMEOUT_MS);
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${authKey}`);
+  headers.set(PROTOCOL_HEADER, String(SYNC_PROTOCOL_VERSION));
+  headers.set(SCHEMA_HEADER, String(SYNC_SCHEMA_VERSION));
   if (init.body) headers.set('content-type', 'application/json');
 
   try {
@@ -134,15 +160,22 @@ async function request<T>(
     if (!response.ok) {
       let detail = text;
       try {
-        detail = (JSON.parse(text) as { error?: string }).error ?? text;
+        const parsed = JSON.parse(text) as { error?: string; message?: string };
+        detail = parsed.message ?? parsed.error ?? text;
       } catch {
         /* keep the raw body */
+      }
+      if (response.status === 426) {
+        throw new IncompatibleSyncSpaceError(
+          detail ||
+            `This relay requires Budget sync protocol ${SYNC_PROTOCOL_VERSION}. Update the app or relay.`,
+        );
       }
       throw new HttpError(response.status, detail || `Request failed (${response.status})`);
     }
     return (text ? JSON.parse(text) : {}) as T;
   } catch (error) {
-    if (error instanceof HttpError) throw error;
+    if (error instanceof HttpError || error instanceof IncompatibleSyncSpaceError) throw error;
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('Sync server timed out.');
     }
@@ -173,6 +206,24 @@ export async function connectSync(
     keys.authKey,
     '/v1/sync/head',
   );
+
+  // A reused Tasker passphrase must not silently start a second, invisible
+  // space on the same relay. Say exactly what happened instead.
+  if (!head.exists) {
+    const legacyKeys = await deriveKeys(passphrase.trim(), 'tasker');
+    const legacyHead = await request<{ exists: boolean; head: number }>(
+      serverUrl,
+      legacyKeys.authKey,
+      '/v1/sync/head',
+    );
+    if (legacyHead.exists) {
+      throw new IncompatibleSyncSpaceError(
+        'That passphrase belongs to an old Tasker sync space. Budget uses a separate ' +
+          'encryption context, so create a new space with a different passphrase.',
+      );
+    }
+  }
+
   if (!head.exists && !allowCreate) throw new NewSyncSpaceError();
 
   if (runtime) await disconnectSync();
@@ -242,10 +293,14 @@ export async function disconnectSync(): Promise<void> {
  */
 async function seedLocal(config: SyncConfig, nextHlc: () => string): Promise<void> {
   const groups: Array<{ kind: EntityKind; values: unknown[] }> = [
-    { kind: 'task', values: await db.tasks.all() },
+    { kind: 'account', values: await db.accounts.all() },
+    { kind: 'categoryGroup', values: await db.categoryGroups.all() },
     { kind: 'category', values: await db.categories.all() },
-    { kind: 'project', values: await db.projects.all() },
-    { kind: 'place', values: await db.places.all() },
+    { kind: 'payee', values: await db.payees.all() },
+    { kind: 'transaction', values: await db.transactions.all() },
+    { kind: 'budget', values: await db.budgets.all() },
+    { kind: 'recurring', values: await db.recurring.all() },
+    { kind: 'rule', values: await db.rules.all() },
     { kind: 'settings', values: [await db.settings.get()] },
   ];
 
@@ -378,7 +433,7 @@ async function withLock(task: () => Promise<void>): Promise<void> {
     await task();
     return;
   }
-  await navigator.locks.request('tasker-sync', { ifAvailable: true }, async (lock) => {
+  await navigator.locks.request('budget-sync', { ifAvailable: true }, async (lock) => {
     if (!lock) return;
     await task();
   });
@@ -478,6 +533,8 @@ async function applyRemote(
   config: SyncConfig,
   change: RemoteChange | RemoteEntity,
 ): Promise<boolean> {
+  // Tasker rows can still exist in an old relay. They are ignored, never merged.
+  if ((LEGACY_ENTITY_TYPES as readonly string[]).includes(change.entityType)) return false;
   if (!ENTITY_KINDS.includes(change.entityType)) return false;
   runtime?.clock.observe(change.hlc);
 
@@ -485,6 +542,9 @@ async function applyRemote(
   if (stored && compareHlc(change.hlc, stored.hlc) <= 0) return false;
 
   if (change.deleted) {
+    if (change.entityType === 'transaction') {
+      await deleteTransferPartner(change.entityId, change.hlc);
+    }
     await deleteEntitySilently(change.entityType, change.entityId);
     await putVersion({
       entityType: change.entityType,
@@ -534,6 +594,44 @@ async function enqueueSettings(settings: Settings): Promise<void> {
   await writeSyncState('app', runtime.config);
 }
 
+/** Publishes a tombstone produced by a merge rule rather than a local edit. */
+async function enqueueDelete(kind: EntityKind, id: string): Promise<void> {
+  if (!runtime) return;
+  const hlc = runtime.clock.next();
+  await clearOutboxForEntity(kind, id);
+  await putOutbox({
+    changeId: crypto.randomUUID(),
+    entityType: kind,
+    entityId: id,
+    hlc,
+    deleted: true,
+    payload: null,
+  });
+  await putVersion({ entityType: kind, entityId: id, hlc, deleted: true });
+  runtime.config.lastHlc = hlc;
+  await writeSyncState('app', runtime.config);
+}
+
+/**
+ * A transfer is one logical row split in two. If either leg is deleted
+ * remotely, remove the partner locally and publish its tombstone too.
+ */
+async function deleteTransferPartner(transactionId: string, hlc: string): Promise<void> {
+  const local = await readEntity<Transaction>('transaction', transactionId);
+  if (!local?.transferPairId) return;
+
+  const all = await db.transactions.all();
+  const partner = all.find(
+    (transaction) =>
+      transaction.id !== local.id && transaction.transferPairId === local.transferPairId,
+  );
+  if (!partner) return;
+
+  await deleteEntitySilently('transaction', partner.id);
+  await putVersion({ entityType: 'transaction', entityId: partner.id, hlc, deleted: true });
+  await enqueueDelete('transaction', partner.id);
+}
+
 async function writeMerged(kind: EntityKind, id: string, payload: unknown): Promise<Settings | null> {
   if (kind === 'settings') {
     const local = await db.settings.get();
@@ -547,32 +645,30 @@ async function writeMerged(kind: EntityKind, id: string, payload: unknown): Prom
     return JSON.stringify(merged.progress) === JSON.stringify(remote.progress) ? null : merged;
   }
 
-  if (kind === 'task') {
-    const local = await readEntity<Task>('task', id);
-    const remote = normalizeTask({ ...(payload as Task), id });
-    if (local) remote.tags = unionStrings(local.tags, remote.tags);
-    await writeEntitySilently('task', remote);
-    return null;
+  switch (kind) {
+    case 'account':
+      await writeEntitySilently(kind, normalizeAccount({ ...(payload as object), id } as never));
+      return null;
+    case 'category':
+      await writeEntitySilently(kind, normalizeCategory({ ...(payload as object), id } as never));
+      return null;
+    case 'categoryGroup':
+      await writeEntitySilently(kind, normalizeCategoryGroup({ ...(payload as object), id } as never));
+      return null;
+    case 'payee':
+      await writeEntitySilently(kind, normalizePayee({ ...(payload as object), id } as never));
+      return null;
+    case 'transaction':
+      await writeEntitySilently(kind, normalizeTransaction({ ...(payload as object), id } as never));
+      return null;
+    case 'budget':
+      await writeEntitySilently(kind, normalizeBudget({ ...(payload as object), id } as never));
+      return null;
+    case 'recurring':
+      await writeEntitySilently(kind, normalizeRecurring({ ...(payload as object), id } as never));
+      return null;
+    case 'rule':
+      await writeEntitySilently(kind, normalizeCategoryRule({ ...(payload as object), id } as never));
+      return null;
   }
-
-  if (kind === 'project') {
-    const local = await readEntity<Project>('project', id);
-    const remote = normalizeProject({ ...(payload as Project), id });
-    if (local) remote.tags = unionTags(local.tags, remote.tags);
-    await writeEntitySilently('project', remote);
-    return null;
-  }
-
-  await writeEntitySilently(kind, { ...(payload as Place), id });
-  return null;
-}
-
-function unionStrings(a: string[], b: string[]): string[] {
-  const seen = new Set(a);
-  return [...a, ...b.filter((value) => !seen.has(value))];
-}
-
-function unionTags(a: Project['tags'], b: Project['tags']): Project['tags'] {
-  const seen = new Set(a.map((tag) => tag.id));
-  return [...a, ...b.filter((tag) => !seen.has(tag.id))];
 }

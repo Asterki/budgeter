@@ -5,7 +5,6 @@ declare const __APP_MODE__: string;
 declare const __BUILD_TIME__: string;
 
 interface ImportMetaEnv {
-  readonly VITE_APP_NAME?: string;
   readonly VITE_SYNC_URL?: string;
 }
 

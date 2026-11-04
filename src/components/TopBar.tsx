@@ -1,50 +1,101 @@
-/**
- * Global menu bar.
- *
- * Search lives on the left, utility actions on the right. The shell has no
- * logo or window chrome — the workspace itself carries the identity.
- */
+/** Global header: identity, net worth, account balances and primary actions. */
 
-import { FiHelpCircle, FiMoon, FiPlus, FiSearch, FiSun } from 'react-icons/fi';
-import type { Settings } from '../domain/types';
+import { FiEye, FiEyeOff, FiMoon, FiPlus, FiSearch, FiSettings, FiSun } from 'react-icons/fi';
+
+import { accountBalance, formatMoney } from '../domain/money';
+import type { Account, Settings, Transaction } from '../domain/types';
 import { ProgressHud } from './ProgressHud';
 
 interface TopBarProps {
-  theme: Settings['theme'];
+  accounts: Account[];
+  transactions: Transaction[];
+  settings: Settings;
+  netWorth: number;
+  onAdd: () => void;
+  onSearch: () => void;
   onToggleTheme: () => void;
-  onFocusSearch: () => void;
-  onFocusQuickAdd: () => void;
-  onOpenManual: () => void;
+  onToggleBalances: () => void;
+  onOpenSettings: () => void;
 }
 
-export function TopBar({ theme, onToggleTheme, onFocusSearch, onFocusQuickAdd, onOpenManual }: TopBarProps) {
+export function TopBar({
+  accounts,
+  transactions,
+  settings,
+  netWorth,
+  onAdd,
+  onSearch,
+  onToggleTheme,
+  onToggleBalances,
+  onOpenSettings,
+}: TopBarProps) {
+  const visibleAccounts = accounts.filter((account) => !account.archived);
+
   return (
     <header className="topbar">
-      <div className="topbar__left">
-        <button type="button" className="search-trigger" onClick={onFocusSearch}>
-          <FiSearch aria-hidden="true" />
-          <span className="search-trigger__label">Search tasks</span>
-          <kbd>/</kbd>
-        </button>
+      <div className="topbar__identity">
+        <span className="topbar__brand">Budget</span>
+        <span className="topbar__meta">Local-first ledger</span>
       </div>
 
-      <div className="topbar__right">
-        <ProgressHud />
+      <div className="topbar__worth">
+        <span className="topbar__worth-label">Net worth</span>
+        <strong className="topbar__worth-value">
+          {formatMoney(netWorth, settings.currency, settings.locale, settings.hideBalances)}
+        </strong>
+      </div>
+
+      <div className="topbar__accounts" aria-label="Account balances">
+        {visibleAccounts.map((account) => (
+          <span key={account.id} className="topbar__account">
+            <span className="dot" style={{ background: account.color }} aria-hidden="true" />
+            <span className="topbar__account-name">{account.name}</span>
+            <span className="topbar__account-value">
+              {formatMoney(
+                accountBalance(account, transactions),
+                settings.currency,
+                settings.locale,
+                settings.hideBalances,
+              )}
+            </span>
+          </span>
+        ))}
+      </div>
+
+      <div className="topbar__actions">
+        <ProgressHud progress={settings.progress} />
+        <button type="button" className="icon-button" onClick={onSearch} aria-label="Search transactions">
+          <FiSearch />
+        </button>
+        <kbd className="topbar__kbd">/</kbd>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={onToggleBalances}
+          aria-label={settings.hideBalances ? 'Show balances' : 'Hide balances'}
+        >
+          {settings.hideBalances ? <FiEyeOff /> : <FiEye />}
+        </button>
         <button
           type="button"
           className="icon-button"
           onClick={onToggleTheme}
-          title={theme === 'nordic-light' ? 'Switch to dark' : 'Switch to light'}
-          aria-label="Toggle theme"
+          aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
         >
-          {theme === 'nordic-light' ? <FiMoon aria-hidden="true" /> : <FiSun aria-hidden="true" />}
+          {settings.theme === 'dark' ? <FiSun /> : <FiMoon />}
         </button>
-        <button type="button" className="icon-button" onClick={onOpenManual} title="User manual" aria-label="User manual">
-          <FiHelpCircle aria-hidden="true" />
+        <button
+          type="button"
+          className="icon-button topbar__settings"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+        >
+          <FiSettings />
         </button>
-        <button type="button" className="button button--primary" onClick={onFocusQuickAdd}>
+        <button type="button" className="button button--primary topbar__add" onClick={onAdd}>
           <FiPlus aria-hidden="true" />
-          Add task
+          <span>Add transaction</span>
+          <kbd>n</kbd>
         </button>
       </div>
     </header>

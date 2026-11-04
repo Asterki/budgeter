@@ -1,213 +1,300 @@
-/**
- * Calendar view — month and week grids showing how work is distributed
- * across days, with a day panel for inspection and quick capture.
- */
+/** Calendar workspace: daily totals, actual rows and planned recurring items. */
 
 import { useMemo, useState } from 'react';
 import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
-import type { Task } from '../domain/types';
+
+import { QuickAdd } from '../components/QuickAdd';
+import { TransactionRow } from '../components/TransactionRow';
+import { useBudget } from '../state/store';
 import {
   addDays,
   addMonths,
-  dateRange,
-  endOfWeek,
   formatDate,
-  isToday,
+  formatDateShort,
   monthLabel,
   monthMatrix,
-  relativeDayLabel,
-  spanDates,
-  startOfWeek,
+  startOfMonth,
   todayISO,
-  WEEKDAYS_SHORT,
 } from '../domain/date';
-import { useTasker } from '../state/store';
-import { QuickAdd } from '../components/QuickAdd';
-import { TaskRow } from '../components/TaskRow';
-
-type CalendarMode = 'month' | 'week';
+import { formatMoney } from '../domain/money';
+import { generatedCounts, plannedOccurrences } from '../domain/recurring';
+import { rangeTotals } from '../domain/reports';
+import type { Transaction } from '../domain/types';
 
 interface CalendarViewProps {
-  onOpenTask: (task: Task) => void;
+  onOpenTransaction: (transaction: Transaction) => void;
 }
 
-interface CalendarEntry {
-  task: Task;
-  /** True on days after the task's start date. */
-  continuation: boolean;
-}
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export function CalendarView({ onOpenTask }: CalendarViewProps) {
-  const { tasks } = useTasker();
-  const [cursor, setCursor] = useState(todayISO());
-  const [mode, setMode] = useState<CalendarMode>('month');
-  const [selected, setSelected] = useState(todayISO());
+export function CalendarView({ onOpenTransaction }: CalendarViewProps) {
+  const { accounts, categories, payees, transactions, recurring, settings } = useBudget();
+  const today = todayISO();
+  const [cursor, setCursor] = useState(() => startOfMonth(today));
+  const [selected, setSelected] = useState(today);
 
-  // A multi-day task occupies every day it spans.
+  const accountsById = useMemo(
+    () => new Map(accounts.map((account) => [account.id, account])),
+    [accounts],
+  );
+  const categoriesById = useMemo(
+    () => new Map(categories.map((category) => [category.id, category])),
+    [categories],
+  );
+  const payeesById = useMemo(() => new Map(payees.map((payee) => [payee.id, payee])), [payees]);
+
+  const grid = useMemo(() => monthMatrix(cursor), [cursor]);
+  const gridStart = grid[0][0];
+  const gridEnd = grid[5][6];
+
   const byDate = useMemo(() => {
-    const map = new Map<string, CalendarEntry[]>();
-    for (const task of tasks) {
-      for (const iso of spanDates(task.date, task.endDate)) {
-        const bucket = map.get(iso) ?? [];
-        bucket.push({ task, continuation: iso !== task.date });
-        map.set(iso, bucket);
-      }
-    }
-    for (const bucket of map.values()) {
-      bucket.sort((a, b) => {
-        if (a.task.allDay !== b.task.allDay) return a.task.allDay ? -1 : 1;
-        if ((a.task.time ?? '') !== (b.task.time ?? '')) return (a.task.time ?? '') < (b.task.time ?? '') ? -1 : 1;
-        if (a.continuation !== b.continuation) return a.continuation ? 1 : -1;
-        return a.task.priority - b.task.priority;
-      });
+    const map = new Map<string, Transaction[]>();
+    for (const transaction of transactions) {
+      const bucket = map.get(transaction.date);
+      if (bucket) bucket.push(transaction);
+      else map.set(transaction.date, [transaction]);
     }
     return map;
-  }, [tasks]);
+  }, [transactions]);
 
-  const monthWeeks = useMemo(() => monthMatrix(cursor), [cursor]);
-  const weekDays = useMemo(
-    () => dateRange(startOfWeek(cursor), endOfWeek(cursor)),
-    [cursor],
+  const plannedByDate = useMemo(() => {
+    const counts = generatedCounts(transactions);
+    const map = new Map<string, { date: string; rule: (typeof recurring)[number] }[]>();
+    for (const rule of recurring) {
+      if (!rule.active || rule.type === 'transfer') continue;
+      const dates = plannedOccurrences(
+        rule,
+        gridStart,
+        gridEnd,
+        counts.get(rule.id) ?? 0,
+        62,
+      );
+      for (const date of dates) {
+        if (date <= today) continue;
+        const bucket = map.get(date) ?? [];
+        bucket.push({ date, rule });
+        map.set(date, bucket);
+      }
+    }
+    return map;
+  }, [recurring, transactions, gridStart, gridEnd, today]);
+
+  const monthSummary = useMemo(
+    () =>
+      rangeTotals(transactions, {
+        from: cursor,
+        to: addDays(addMonths(cursor, 1), -1),
+      }),
+    [transactions, cursor],
   );
 
-  const weeks = mode === 'month' ? monthWeeks : [weekDays];
-  const currentMonth = cursor.slice(0, 7);
+  const monthEnd = useMemo(() => addMonths(cursor, 1), [cursor]);
 
-  function shift(direction: -1 | 1) {
-    const next = mode === 'month' ? addMonths(cursor, direction) : addDays(cursor, direction * 7);
+  const monthRows = useMemo(
+    () => transactions.filter((transaction) => transaction.date >= cursor && transaction.date < monthEnd),
+    [transactions, cursor, monthEnd],
+  );
+
+  const monthNet = monthRows.reduce(
+    (total, transaction) => (transaction.type === 'transfer' ? total : total + transaction.amount),
+    0,
+  );
+
+  function move(offset: number) {
+    const next = startOfMonth(addMonths(cursor, offset));
     setCursor(next);
     setSelected(next);
   }
 
-  function goToday() {
-    setCursor(todayISO());
-    setSelected(todayISO());
+  function netFor(date: string): number {
+    const rows = byDate.get(date) ?? [];
+    return rows.reduce(
+      (total, transaction) => (transaction.type === 'transfer' ? total : total + transaction.amount),
+      0,
+    );
   }
 
-  const selectedEntries = byDate.get(selected) ?? [];
+  const selectedRows = byDate.get(selected) ?? [];
+  const selectedPlanned = plannedByDate.get(selected) ?? [];
+  const selectedNet = selectedRows.reduce(
+    (total, transaction) => (transaction.type === 'transfer' ? total : total + transaction.amount),
+    0,
+  );
 
   return (
-    <section className="view">
-      <header className="view__header">
+    <section className="calendar">
+      <div className="calendar__head">
         <div>
-          <h1 className="view__title">Calendar</h1>
-          <p className="view__subtitle">
-            {mode === 'month' ? monthLabel(cursor) : `${relativeDayLabel(startOfWeek(cursor))} – ${relativeDayLabel(endOfWeek(cursor))}`}
+          <h1 className="calendar__title">Calendar</h1>
+          <p className="calendar__summary">
+            {monthLabel(cursor)} · in{' '}
+            <span className="amount--in">
+              {formatMoney(monthSummary.income, settings.currency, settings.locale)}
+            </span>{' '}
+            · out{' '}
+            <span className="amount--out">
+              {formatMoney(monthSummary.expense, settings.currency, settings.locale)}
+            </span>{' '}
+            · net{' '}
+            <strong>{formatMoney(monthNet, settings.currency, settings.locale)}</strong>
           </p>
         </div>
-        <div className="calendar__toolbar">
-          <button type="button" className="button" onClick={() => shift(-1)} aria-label="Previous period">
+        <div className="calendar__nav">
+          <button
+            type="button"
+            className="button button--ghost button--icon"
+            onClick={() => move(-1)}
+            aria-label="Previous month"
+          >
             <FiChevronLeft aria-hidden="true" />
           </button>
-          <button type="button" className="button" onClick={goToday}>
-            Today
+          <button type="button" className="button button--ghost" onClick={() => move(0)}>
+            {monthLabel(cursor)}
           </button>
-          <button type="button" className="button" onClick={() => shift(1)} aria-label="Next period">
+          <button
+            type="button"
+            className="button button--ghost button--icon"
+            onClick={() => move(1)}
+            aria-label="Next month"
+          >
             <FiChevronRight aria-hidden="true" />
           </button>
-          <div className="segmented">
-            <button
-              type="button"
-              className={mode === 'month' ? 'segmented__item segmented__item--active' : 'segmented__item'}
-              onClick={() => setMode('month')}
-            >
-              Month
-            </button>
-            <button
-              type="button"
-              className={mode === 'week' ? 'segmented__item segmented__item--active' : 'segmented__item'}
-              onClick={() => setMode('week')}
-            >
-              Week
-            </button>
-          </div>
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => {
+              setCursor(startOfMonth(today));
+              setSelected(today);
+            }}
+          >
+            Today
+          </button>
         </div>
-      </header>
+      </div>
 
-      <div className={`calendar calendar--${mode}`}>
-        <div className="calendar__weekdays">
-          {WEEKDAYS_SHORT.map((day, index) => (
-            <span key={`${day}-${index}`} className="calendar__weekday">
-              {mode === 'month' ? day.slice(0, 3) : day}
-            </span>
+      <div className="calendar__grid-wrap">
+        <div className="calendar__weekdays" aria-hidden="true">
+          {WEEKDAYS.map((day) => (
+            <span key={day}>{day}</span>
           ))}
         </div>
-
-        <div className="calendar__grid">
-          {weeks.flat().map((iso) => {
-            const entries = byDate.get(iso) ?? [];
-            const outside = mode === 'month' && iso.slice(0, 7) !== currentMonth;
-            const openCount = entries.filter((entry) => !entry.task.completed).length;
-            const limit = mode === 'week' ? 6 : 3;
-            return (
-              <button
-                type="button"
-                key={iso}
-                className={[
-                  'calendar__cell',
-                  outside ? 'calendar__cell--outside' : '',
-                  isToday(iso) ? 'calendar__cell--today' : '',
-                  selected === iso ? 'calendar__cell--selected' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                onClick={() => {
-                  setSelected(iso);
-                  setCursor(iso);
-                }}
-              >
-                <span className="calendar__date">{Number(iso.slice(8, 10))}</span>
-                <span className="calendar__items">
-                  {entries.slice(0, limit).map((entry) => (
-                    <span
-                      key={`${entry.task.id}-${iso}`}
-                      className={[
-                        'calendar__item',
-                        `calendar__item--p${entry.task.priority}`,
-                        entry.task.completed ? 'calendar__item--done' : '',
-                        entry.continuation ? 'calendar__item--span' : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                    >
-                      {!entry.task.allDay && entry.task.time && !entry.continuation ? `${entry.task.time} ` : ''}
-                      {entry.task.title}
+        <div className="calendar__grid" role="grid" aria-label={`${monthLabel(cursor)} calendar`}>
+          {grid.map((week) =>
+            week.map((date) => {
+              const actual = byDate.get(date)?.length ?? 0;
+              const planned = plannedByDate.get(date)?.length ?? 0;
+              const net = netFor(date);
+              const inMonth = date.slice(0, 7) === cursor.slice(0, 7);
+              return (
+                <button
+                  key={date}
+                  type="button"
+                  className={[
+                    'calendar__cell',
+                    inMonth ? '' : 'calendar__cell--outside',
+                    date === today ? 'calendar__cell--today' : '',
+                    date === selected ? 'calendar__cell--selected' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  onClick={() => setSelected(date)}
+                  aria-pressed={date === selected}
+                  aria-label={`${formatDate(date)}: ${actual} transactions, ${planned} planned`}
+                >
+                  <span className="calendar__day">{Number(date.slice(8, 10))}</span>
+                  {net !== 0 && (
+                    <span className={`calendar__net ${net > 0 ? 'amount--in' : 'amount--out'}`}>
+                      {formatMoney(net, settings.currency, settings.locale)}
                     </span>
-                  ))}
-                  {entries.length > limit && (
-                    <span className="calendar__more">+{entries.length - limit} more</span>
                   )}
-                </span>
-                {openCount > 0 && <span className="calendar__badge">{openCount}</span>}
-              </button>
-            );
-          })}
+                  <span className="calendar__dots" aria-hidden="true">
+                    {Array.from({ length: Math.min(3, actual) }).map((_, index) => (
+                      <span key={`a${index}`} className="calendar__dot" />
+                    ))}
+                    {Array.from({ length: Math.min(2, planned) }).map((_, index) => (
+                      <span key={`p${index}`} className="calendar__dot calendar__dot--planned" />
+                    ))}
+                    {actual + planned > 5 && <span className="calendar__more">+</span>}
+                  </span>
+                </button>
+              );
+            }),
+          )}
         </div>
       </div>
 
-      <div className="calendar__day">
-        <header className="group__header">
-          <span className="group__title">{formatDate(selected)}</span>
-          <span className="group__count">{selectedEntries.length}</span>
+      <section className="calendar__day-panel" aria-label={`Transactions on ${formatDate(selected)}`}>
+        <header className="calendar__day-head">
+          <div>
+            <h2 className="calendar__day-title">
+              {selected === today ? 'Today' : formatDateShort(selected)}
+            </h2>
+            <p className="calendar__day-sub">{formatDate(selected)}</p>
+          </div>
+          <span className={`calendar__day-total ${selectedNet > 0 ? 'amount--in' : selectedNet < 0 ? 'amount--out' : ''}`}>
+            {formatMoney(selectedNet, settings.currency, settings.locale)}
+          </span>
         </header>
 
-        <QuickAdd defaultDate={selected} compact placeholder={`Add a task on ${formatDate(selected)}…`} />
+        <QuickAdd defaultDate={selected} />
 
-        {selectedEntries.length === 0 ? (
-          <p className="muted">No tasks scheduled for this day.</p>
+        {selectedRows.length === 0 && selectedPlanned.length === 0 ? (
+          <p className="calendar__empty">No transactions on this day.</p>
         ) : (
-          <ul className="task-list">
-            {selectedEntries.map((entry) => (
-              <TaskRow
-                key={`${entry.task.id}-${selected}`}
-                task={entry.task}
-                onOpen={onOpenTask}
-                continuation={entry.continuation}
+          <div className="calendar__rows">
+            {selectedRows.map((transaction) => (
+              <TransactionRow
+                key={transaction.id}
+                transaction={transaction}
+                account={accountsById.get(transaction.accountId)}
+                category={
+                  transaction.categoryId ? categoriesById.get(transaction.categoryId) : undefined
+                }
+                payee={transaction.payeeId ? payeesById.get(transaction.payeeId) : undefined}
+                transferAccount={
+                  transaction.transferAccountId
+                    ? accountsById.get(transaction.transferAccountId)
+                    : undefined
+                }
+                currency={settings.currency}
+                locale={settings.locale}
+                showAccount
+                onOpen={() => onOpenTransaction(transaction)}
               />
             ))}
-          </ul>
+            {selectedPlanned.map(({ date, rule }) => {
+              const category = rule.categoryId ? categoriesById.get(rule.categoryId) : undefined;
+              const payee = rule.payeeId ? payeesById.get(rule.payeeId) : undefined;
+              return (
+                <div key={`${rule.id}-${date}`} className="tx-row tx-row--planned">
+                  <span
+                    className="tx-row__marker tx-row__marker--planned"
+                    style={{ background: category?.color ?? accountsById.get(rule.accountId)?.color }}
+                    aria-hidden="true"
+                  />
+                  <span className="tx-row__main">
+                    <span className="tx-row__title">
+                      {payee?.name || rule.notes.trim() || category?.name || 'Scheduled'}
+                    </span>
+                    <span className="tx-row__meta">
+                      <span className="tx-row__chip">Planned</span>
+                      <span className="tx-row__chip">Recurring</span>
+                      {category && <span className="tx-row__chip">{category.name}</span>}
+                    </span>
+                  </span>
+                  <span className="tx-row__side">
+                    <span
+                      className={`tx-row__amount ${rule.amount > 0 ? 'tx-row__amount--in' : 'tx-row__amount--out'}`}
+                    >
+                      {formatMoney(rule.amount, settings.currency, settings.locale)}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         )}
-      </div>
+      </section>
     </section>
   );
 }

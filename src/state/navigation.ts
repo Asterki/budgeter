@@ -1,34 +1,27 @@
-/** Navigation model shared by the shell, the rail and the bottom tab bar. */
+/** Navigation state shared by the shell, rail and transaction list. */
 
-export type ViewKey = 'tasks' | 'calendar' | 'roadmap' | 'settings';
+export type ViewKey =
+  | 'transactions'
+  | 'budget'
+  | 'calendar'
+  | 'reports'
+  | 'forecast'
+  | 'settings';
 
-export type TaskScope =
-  | 'scheduled'
-  | 'all'
-  | 'today'
-  | 'upcoming'
-  | 'inbox'
-  | 'completed'
-  | 'project'
-  | 'category'
-  | 'place';
+/** The ledger slice currently shown in the transactions view. */
+export type TransactionScope =
+  | { kind: 'all' }
+  | { kind: 'account'; accountId: string }
+  | { kind: 'group'; groupId: string }
+  | { kind: 'uncategorized' }
+  | { kind: 'payee'; payeeId: string };
 
 export interface NavSelection {
   view: ViewKey;
-  scope: TaskScope;
-  projectId: string | null;
-  categoryId: string | null;
-  place: string | null;
+  scope: TransactionScope;
 }
 
-/**
- * The landing view: every task that has a date, grouped by the day it sits on.
- * Undated work stays in the Inbox or inside its project.
- */
 export const INITIAL_SELECTION: NavSelection = {
-  view: 'tasks',
-  scope: 'scheduled',
-  projectId: null,
-  categoryId: null,
-  place: null,
+  view: 'transactions',
+  scope: { kind: 'all' },
 };
