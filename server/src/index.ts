@@ -6,8 +6,12 @@
  * payloads are stored as opaque strings.
  */
 
-import { createHash } from 'node:crypto';
-import express, { type NextFunction, type Request, type Response } from 'express';
+import { createHash } from "node:crypto";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import {
   ENTITY_TYPES,
   db,
@@ -19,7 +23,7 @@ import {
   type ChangeInput,
   type EntityType,
   type UserRow,
-} from './db.js';
+} from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const RETENTION_DAYS = Number(process.env.SYNC_RETENTION_DAYS ?? 90);
@@ -30,10 +34,10 @@ const HLC_PATTERN = /^\d{15}-\d{6}-[A-Za-z0-9-]{6,64}$/;
 /** Must match src/sync/protocol.ts. */
 const SYNC_PROTOCOL_VERSION = 2;
 const SYNC_SCHEMA_VERSION = 6;
-const LEGACY_ENTITY_TYPES = new Set(['task', 'project', 'place']);
+const LEGACY_ENTITY_TYPES = new Set(["task", "project", "place"]);
 
-const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
-  .split(',')
+const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
+  .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
@@ -42,26 +46,29 @@ interface AuthedRequest extends Request {
 }
 
 const app = express();
-app.disable('x-powered-by');
-app.use(express.json({ limit: '2mb' }));
+app.disable("x-powered-by");
+app.use(express.json({ limit: "2mb" }));
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Authorization, Content-Type X-Budget-Sync-Protocol",
+    );
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Max-Age", "86400");
   }
 
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     res.sendStatus(origin && allowedOrigins.includes(origin) ? 204 : 403);
     return;
   }
 
   if (origin && !allowedOrigins.includes(origin)) {
-    res.status(403).json({ error: 'origin_not_allowed' });
+    res.status(403).json({ error: "origin_not_allowed" });
     return;
   }
 
@@ -83,17 +90,17 @@ function rateLimited(keyHash: string): boolean {
 }
 
 function authenticate(req: Request, res: Response, next: NextFunction): void {
-  const header = req.headers.authorization ?? '';
-  const key = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const header = req.headers.authorization ?? "";
+  const key = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 
   if (key.length < 32 || key.length > 200) {
-    res.status(401).json({ error: 'missing_key' });
+    res.status(401).json({ error: "missing_key" });
     return;
   }
 
-  const keyHash = createHash('sha256').update(key).digest('hex');
+  const keyHash = createHash("sha256").update(key).digest("hex");
   if (rateLimited(keyHash)) {
-    res.status(429).json({ error: 'slow_down' });
+    res.status(429).json({ error: "slow_down" });
     return;
   }
 
@@ -101,10 +108,10 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-app.get('/health', (_req, res) => {
+app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    service: 'budget-sync',
+    service: "budget-sync",
     protocol: SYNC_PROTOCOL_VERSION,
     schema: SYNC_SCHEMA_VERSION,
   });
@@ -114,13 +121,16 @@ app.get('/health', (_req, res) => {
  * Protocol gate. Old Tasker clients send no headers and are told to upgrade;
  * Budget clients always announce both the wire protocol and data schema.
  */
-app.use('/v1/sync', (req: Request, res: Response, next: NextFunction) => {
-  const protocol = req.get('x-budget-sync-protocol') ?? '';
-  const schema = req.get('x-budget-sync-schema') ?? '';
+app.use("/v1/sync", (req: Request, res: Response, next: NextFunction) => {
+  const protocol = req.get("x-budget-sync-protocol") ?? "";
+  const schema = req.get("x-budget-sync-schema") ?? "";
 
-  if (protocol !== String(SYNC_PROTOCOL_VERSION) || schema !== String(SYNC_SCHEMA_VERSION)) {
+  if (
+    protocol !== String(SYNC_PROTOCOL_VERSION) ||
+    schema !== String(SYNC_SCHEMA_VERSION)
+  ) {
     res.status(426).json({
-      error: 'incompatible_protocol',
+      error: "incompatible_protocol",
       message:
         `This relay requires Budget sync protocol ${SYNC_PROTOCOL_VERSION} ` +
         `(schema ${SYNC_SCHEMA_VERSION}). Update the app or point it at a Budget relay.`,
@@ -133,25 +143,25 @@ app.use('/v1/sync', (req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.get('/v1/sync/head', authenticate, (req, res) => {
+app.get("/v1/sync/head", authenticate, (req, res) => {
   const user = (req as AuthedRequest).user;
   res.json({ exists: user.head_seq > 0, head: user.head_seq });
 });
 
-app.post('/v1/sync/push', authenticate, (req, res) => {
+app.post("/v1/sync/push", authenticate, (req, res) => {
   const user = (req as AuthedRequest).user;
   const body = req.body as { clientId?: unknown; changes?: unknown };
 
-  if (typeof body.clientId !== 'string' || body.clientId.length > 80) {
-    res.status(400).json({ error: 'invalid_client' });
+  if (typeof body.clientId !== "string" || body.clientId.length > 80) {
+    res.status(400).json({ error: "invalid_client" });
     return;
   }
   if (!Array.isArray(body.changes) || body.changes.length === 0) {
-    res.status(400).json({ error: 'no_changes' });
+    res.status(400).json({ error: "no_changes" });
     return;
   }
   if (body.changes.length > BATCH_LIMIT) {
-    res.status(413).json({ error: 'batch_too_large' });
+    res.status(413).json({ error: "batch_too_large" });
     return;
   }
 
@@ -161,33 +171,33 @@ app.post('/v1/sync/push', authenticate, (req, res) => {
     const item = raw as Record<string, unknown>;
     const entityType = item.entityType;
 
-    if (typeof entityType === 'string' && LEGACY_ENTITY_TYPES.has(entityType)) {
+    if (typeof entityType === "string" && LEGACY_ENTITY_TYPES.has(entityType)) {
       res.status(400).json({
-        error: 'legacy_entity_type',
+        error: "legacy_entity_type",
         message:
-          'This change uses a Tasker entity type. Budget sync only accepts accounts, ' +
-          'categories, groups, payees, transactions, budgets, recurring rules and settings.',
+          "This change uses a Tasker entity type. Budget sync only accepts accounts, " +
+          "categories, groups, payees, transactions, budgets, recurring rules and settings.",
       });
       return;
     }
 
     if (
-      typeof item.changeId !== 'string' ||
+      typeof item.changeId !== "string" ||
       item.changeId.length < 8 ||
       item.changeId.length > 80 ||
-      typeof item.entityId !== 'string' ||
+      typeof item.entityId !== "string" ||
       item.entityId.length === 0 ||
       item.entityId.length > 120 ||
-      typeof item.hlc !== 'string' ||
+      typeof item.hlc !== "string" ||
       !HLC_PATTERN.test(item.hlc) ||
-      typeof item.deleted !== 'boolean' ||
-      typeof entityType !== 'string' ||
+      typeof item.deleted !== "boolean" ||
+      typeof entityType !== "string" ||
       !ENTITY_TYPES.includes(entityType as EntityType) ||
-      typeof item.payload !== 'string' ||
+      typeof item.payload !== "string" ||
       item.payload.length > MAX_PAYLOAD ||
-      (item.deleted && item.payload !== '')
+      (item.deleted && item.payload !== "")
     ) {
-      res.status(400).json({ error: 'invalid_change' });
+      res.status(400).json({ error: "invalid_change" });
       return;
     }
 
@@ -203,7 +213,9 @@ app.post('/v1/sync/push', authenticate, (req, res) => {
   }
 
   const result = pushChanges(user.key_hash, changes);
-  const fresh = db.prepare('SELECT * FROM users WHERE key_hash = ?').get(user.key_hash) as UserRow;
+  const fresh = db
+    .prepare("SELECT * FROM users WHERE key_hash = ?")
+    .get(user.key_hash) as UserRow;
 
   res.json({
     accepted: result.accepted,
@@ -212,18 +224,21 @@ app.post('/v1/sync/push', authenticate, (req, res) => {
   });
 });
 
-app.get('/v1/sync/changes', authenticate, (req, res) => {
+app.get("/v1/sync/changes", authenticate, (req, res) => {
   const user = (req as AuthedRequest).user;
   const since = Number(req.query.since ?? 0);
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 200), 1), BATCH_LIMIT);
+  const limit = Math.min(
+    Math.max(Number(req.query.limit ?? 200), 1),
+    BATCH_LIMIT,
+  );
 
   if (!Number.isFinite(since) || since < 0 || !Number.isFinite(limit)) {
-    res.status(400).json({ error: 'invalid_cursor' });
+    res.status(400).json({ error: "invalid_cursor" });
     return;
   }
 
   if (since < user.min_seq) {
-    res.status(410).json({ error: 'resync_required', head: user.head_seq });
+    res.status(410).json({ error: "resync_required", head: user.head_seq });
     return;
   }
 
@@ -244,15 +259,20 @@ app.get('/v1/sync/changes', authenticate, (req, res) => {
   });
 });
 
-app.get('/v1/sync/snapshot', authenticate, (req, res) => {
+app.get("/v1/sync/snapshot", authenticate, (req, res) => {
   const user = (req as AuthedRequest).user;
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 200), 1), BATCH_LIMIT);
-  const afterType = typeof req.query.afterType === 'string' ? req.query.afterType : '';
-  const afterId = typeof req.query.afterId === 'string' ? req.query.afterId : '';
+  const limit = Math.min(
+    Math.max(Number(req.query.limit ?? 200), 1),
+    BATCH_LIMIT,
+  );
+  const afterType =
+    typeof req.query.afterType === "string" ? req.query.afterType : "";
+  const afterId =
+    typeof req.query.afterId === "string" ? req.query.afterId : "";
   const after = afterType && afterId ? { type: afterType, id: afterId } : null;
 
   if (!Number.isFinite(limit)) {
-    res.status(400).json({ error: 'invalid_limit' });
+    res.status(400).json({ error: "invalid_limit" });
     return;
   }
 
@@ -271,16 +291,19 @@ app.get('/v1/sync/snapshot', authenticate, (req, res) => {
 });
 
 app.use((_req, res) => {
-  res.status(404).json({ error: 'not_found' });
+  res.status(404).json({ error: "not_found" });
 });
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(error);
-  res.status(500).json({ error: 'internal' });
+  res.status(500).json({ error: "internal" });
 });
 
 purgeOldChanges(RETENTION_DAYS);
-const purgeTimer = setInterval(() => purgeOldChanges(RETENTION_DAYS), 6 * 60 * 60 * 1000);
+const purgeTimer = setInterval(
+  () => purgeOldChanges(RETENTION_DAYS),
+  6 * 60 * 60 * 1000,
+);
 purgeTimer.unref();
 
 app.listen(PORT, () => {
