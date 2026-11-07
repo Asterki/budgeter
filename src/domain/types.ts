@@ -17,6 +17,8 @@ export interface Account {
   color: string;
   /** Balance before any recorded transaction, in cents. */
   openingBalance: number;
+  /** Optional credit limit in cents. Only meaningful for credit accounts. */
+  creditLimit?: number;
   /** Optional per-account currency override; falls back to the app currency. */
   currency?: string;
   archived: boolean;

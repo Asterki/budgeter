@@ -87,10 +87,16 @@ export function TransactionDetail({ transaction, defaultAccountId, onClose }: Tr
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  const visibleCategories = categories.filter(
-    (category) =>
-      category.kind === type && (!category.archived || category.id === transaction?.categoryId),
-  );
+  const seenCategories = new Set<string>();
+  const visibleCategories = categories.filter((category) => {
+    if (category.kind !== type) return false;
+    if (category.archived && category.id !== transaction?.categoryId) return false;
+    // One option per name+kind, even if an older build stored duplicates.
+    const key = `${category.name.toLowerCase()}|${category.kind}`;
+    if (seenCategories.has(key)) return false;
+    seenCategories.add(key);
+    return true;
+  });
 
   function resolvePayee(): string | null {
     const name = payeeName.trim();

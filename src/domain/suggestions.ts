@@ -64,9 +64,17 @@ export function buildSuggestions(token: ActiveToken, context: SuggestionContext)
         .slice(0, 8)
         .map((payee) => ({ kind: 'payee', value: payee.name, label: payee.name }));
 
-    case '#':
+    case '#': {
+      const seen = new Set<string>();
       return context.categories
         .filter((category) => !category.archived && matches(category.name))
+        .filter((category) => {
+          // Hide duplicates left behind by older builds: same name and kind.
+          const key = `${category.name.toLowerCase()}|${category.kind}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, 8)
         .map((category) => ({
@@ -75,6 +83,7 @@ export function buildSuggestions(token: ActiveToken, context: SuggestionContext)
           label: category.name,
           detail: category.kind,
         }));
+    }
 
     case '^':
       return context.accounts

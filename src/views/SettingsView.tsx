@@ -358,10 +358,25 @@ export function SettingsView() {
                     </span>
                     <span className="settings-list__meta">
                       {account.type}
+                      {account.creditLimit
+                        ? ` · limit ${formatMoney(
+                            account.creditLimit,
+                            settings.currency,
+                            settings.locale,
+                            settings.hideBalances,
+                          )}`
+                        : ''}
                       {account.currency ? ` · ${account.currency}` : ''}
                     </span>
                   </span>
-                  <span className="settings-list__value">
+                  <span
+                    className={`settings-list__value${
+                      account.type === 'credit' &&
+                      accountBalance(account, transactions) < 0
+                        ? ' amount--out'
+                        : ''
+                    }`}
+                  >
                     {formatMoney(
                       accountBalance(account, transactions),
                       settings.currency,

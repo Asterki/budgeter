@@ -91,6 +91,7 @@ export function QuickAdd({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [repeatRule, setRepeatRule] = useState<RecurrenceRule | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
 
   const tags = useMemo(
@@ -121,15 +122,24 @@ export function QuickAdd({
     ],
   );
 
-  const activeToken = suggestionsOpen ? findActiveToken(value, caret) : null;
+  // The token under the caret is tracked even while the popup is closed so
+  // arrow keys can reopen and navigate it from anywhere in the line.
+  const caretToken = useMemo(() => findActiveToken(value, caret), [value, caret]);
+  const activeToken = suggestionsOpen ? caretToken : null;
   const suggestions = useMemo(
-    () => (activeToken ? buildSuggestions(activeToken, { accounts, categories, payees, tags }) : []),
-    [activeToken, accounts, categories, payees, tags],
+    () => (caretToken ? buildSuggestions(caretToken, { accounts, categories, payees, tags }) : []),
+    [caretToken, accounts, categories, payees, tags],
   );
 
   useEffect(() => {
     if (focusSignal > 0) inputRef.current?.focus();
   }, [focusSignal]);
+
+  useEffect(() => {
+    if (!suggestionsOpen) return;
+    const option = listRef.current?.querySelector('[aria-selected="true"]');
+    option?.scrollIntoView({ block: 'nearest' });
+  }, [highlight, suggestionsOpen, suggestions.length]);
 
   function update(nextValue: string, nextCaret = nextValue.length) {
     setValue(nextValue);
@@ -152,15 +162,28 @@ export function QuickAdd({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'ArrowDown' && suggestions.length > 0) {
-      event.preventDefault();
-      setHighlight((index) => (index + 1) % suggestions.length);
-      return;
-    }
-    if (event.key === 'ArrowUp' && suggestions.length > 0) {
-      event.preventDefault();
-      setHighlight((index) => (index - 1 + suggestions.length) % suggestions.length);
-      return;
+    const caretNow = event.currentTarget.selectionStart ?? caret;
+    if (caretNow !== caret) setCaret(caretNow);
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const token = findActiveToken(value, caretNow);
+      const available = token
+        ? buildSuggestions(token, { accounts, categories, payees, tags })
+        : [];
+      if (available.length > 0) {
+        event.preventDefault();
+        if (!suggestionsOpen) {
+          setSuggestionsOpen(true);
+          setHighlight(event.key === 'ArrowUp' ? available.length - 1 : 0);
+        } else {
+          setHighlight((index) =>
+            event.key === 'ArrowUp'
+              ? (index - 1 + available.length) % available.length
+              : (index + 1) % available.length,
+          );
+        }
+        return;
+      }
     }
     if ((event.key === 'Tab' || (event.key === 'Enter' && suggestionsOpen)) && suggestions.length > 0) {
       event.preventDefault();
@@ -269,6 +292,8 @@ export function QuickAdd({
           value={value}
           onChange={(event) => update(event.target.value, event.target.selectionStart ?? event.target.value.length)}
           onKeyDown={handleKeyDown}
+          onKeyUp={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
           onClick={(event) => {
             setCaret(event.currentTarget.selectionStart ?? 0);
             setSuggestionsOpen(true);
@@ -320,9 +345,13 @@ export function QuickAdd({
       )}
 
       {suggestionsOpen && suggestions.length > 0 && activeToken && (
-        <ul className="suggestions" id={listId} role="listbox">
+        <ul className="suggestions" id={listId} role="listbox" ref={listRef}>
           {suggestions.map((suggestion, index) => (
-            <li key={`${suggestion.kind}:${suggestion.value}`} role="option" aria-selected={index === highlight}>
+            <li
+              key={`${suggestion.kind}:${suggestion.value}:${suggestion.detail ?? ''}`}
+              role="option"
+              aria-selected={index === highlight}
+            >
               <button
                 type="button"
                 className={`suggestion${index === highlight ? ' suggestion--active' : ''}`}

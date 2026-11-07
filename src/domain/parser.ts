@@ -715,8 +715,12 @@ export function parseTransactionInput(input: string, context: ParseContext): Par
     payeeName = payee.name;
   }
 
+  const categoryKind = type === 'income' ? 'income' : 'expense';
   const category = categoryName
-    ? context.categories.find((item) => item.name.toLowerCase() === categoryName!.toLowerCase())
+    ? context.categories.find(
+        (item) =>
+          item.name.toLowerCase() === categoryName!.toLowerCase() && item.kind === categoryKind,
+      )
     : undefined;
   if (category) {
     categoryId = category.id;

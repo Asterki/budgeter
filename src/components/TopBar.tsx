@@ -50,7 +50,14 @@ export function TopBar({
           <span key={account.id} className="topbar__account">
             <span className="dot" style={{ background: account.color }} aria-hidden="true" />
             <span className="topbar__account-name">{account.name}</span>
-            <span className="topbar__account-value">
+            <span
+              className={`topbar__account-value${
+                account.type === 'credit' &&
+                accountBalance(account, transactions) < 0
+                  ? ' amount--out'
+                  : ''
+              }`}
+            >
               {formatMoney(
                 accountBalance(account, transactions),
                 settings.currency,

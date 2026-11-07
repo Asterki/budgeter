@@ -127,6 +127,23 @@ export function accountBalance(account: Account, transactions: readonly Transact
     .reduce((balance, transaction) => balance + transaction.amount, account.openingBalance);
 }
 
+/** Money owed on a credit account, in positive cents. */
+export function creditOwed(account: Account, transactions: readonly Transaction[]): number {
+  return Math.max(0, -accountBalance(account, transactions));
+}
+
+/**
+ * Remaining credit, in cents, or `null` when the account has no limit set.
+ * A positive balance (overpayment) leaves the whole limit available.
+ */
+export function creditAvailable(
+  account: Account,
+  transactions: readonly Transaction[],
+): number | null {
+  if (!account.creditLimit) return null;
+  return Math.max(0, account.creditLimit - creditOwed(account, transactions));
+}
+
 /**
  * Signed activity for a category in a `YYYY-MM` month. Spending reads negative;
  * transfers are ignored because they do not change net worth.

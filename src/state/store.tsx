@@ -65,6 +65,7 @@ export interface NewAccountInput {
   type?: AccountType;
   color?: string;
   openingBalance?: number;
+  creditLimit?: number;
   currency?: string;
 }
 
@@ -517,6 +518,7 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
       type: input.type ?? 'checking',
       color: input.color ?? ACCOUNT_COLORS[accountsRef.current.length % ACCOUNT_COLORS.length],
       openingBalance: Math.round(input.openingBalance ?? 0),
+      ...(input.creditLimit !== undefined ? { creditLimit: Math.round(input.creditLimit) } : {}),
       ...(input.currency ? { currency: input.currency } : {}),
       archived: false,
       order: nextOrder(accountsRef.current),
@@ -605,11 +607,21 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
   /* ── Categories ─────────────────────────────────────────────────────────── */
 
   const createCategory = useCallback((input: NewCategoryInput): Category => {
+    const name = input.name.trim() || 'Category';
+    const kind = input.kind ?? 'expense';
+
+    // Reuse an existing category with the same name and kind instead of
+    // creating near-duplicate rows from quick-add or import flows.
+    const existing = categoriesRef.current.find(
+      (category) => category.name.toLowerCase() === name.toLowerCase() && category.kind === kind,
+    );
+    if (existing) return existing;
+
     const now = Date.now();
     const category: Category = {
       id: createId('cat'),
-      name: input.name.trim() || 'Category',
-      kind: input.kind ?? 'expense',
+      name,
+      kind,
       color: input.color ?? CATEGORY_COLORS[categoriesRef.current.length % CATEGORY_COLORS.length],
       groupId: input.groupId ?? null,
       order: nextOrder(categoriesRef.current),

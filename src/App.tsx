@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   FiBarChart2,
   FiCalendar,
+  FiCreditCard,
   FiList,
   FiMoreHorizontal,
   FiPieChart,
@@ -20,6 +21,7 @@ import { monthRange } from './domain/budget';
 import { netWorth } from './domain/ledger';
 import { useBudget } from './state/store';
 import { INITIAL_SELECTION, type NavSelection, type TransactionScope, type ViewKey } from './state/navigation';
+import { AccountsView } from './views/AccountsView';
 import { BudgetView } from './views/BudgetView';
 import { CalendarView } from './views/CalendarView';
 import { ForecastView } from './views/ForecastView';
@@ -30,6 +32,7 @@ import type { Account } from './domain/types';
 
 const TABS: { view: ViewKey; label: string; icon: typeof FiList }[] = [
   { view: 'transactions', label: 'Ledger', icon: FiList },
+  { view: 'accounts', label: 'Accounts', icon: FiCreditCard },
   { view: 'budget', label: 'Budget', icon: FiPieChart },
   { view: 'calendar', label: 'Calendar', icon: FiCalendar },
   { view: 'reports', label: 'Reports', icon: FiBarChart2 },
@@ -37,8 +40,8 @@ const TABS: { view: ViewKey; label: string; icon: typeof FiList }[] = [
   { view: 'settings', label: 'Settings', icon: FiSettings },
 ];
 
-const MOBILE_TABS = TABS.slice(0, 3);
-const MORE_TABS = TABS.slice(3);
+const MOBILE_TABS = TABS.slice(0, 4);
+const MORE_TABS = TABS.slice(4);
 
 export function App() {
   const { ready, accounts, transactions, settings, updateSettings } = useBudget();
@@ -93,7 +96,7 @@ export function App() {
         event.preventDefault();
         setSelection((prev) => ({ ...prev, view: 'transactions' }));
         setSearchSignal((value) => value + 1);
-      } else if (/^[1-6]$/.test(event.key)) {
+      } else if (/^[1-7]$/.test(event.key)) {
         event.preventDefault();
         const view = TABS[Number(event.key) - 1]?.view;
         if (view) setSelection((prev) => ({ ...prev, view }));
@@ -167,6 +170,15 @@ export function App() {
               searchSignal={searchSignal}
               composeSignal={composeSignal}
               categoryJump={budgetJump}
+            />
+          )}
+          {selection.view === 'accounts' && (
+            <AccountsView
+              onAddAccount={() => setAccountDialog(null)}
+              onEditAccount={(account) => setAccountDialog(account)}
+              onOpenAccount={(account) =>
+                selectScope({ kind: 'account', accountId: account.id })
+              }
             />
           )}
           {selection.view === 'budget' && <BudgetView onOpenCategory={openBudgetCategory} />}

@@ -5,6 +5,7 @@ import {
   FiBarChart2,
   FiCalendar,
   FiChevronRight,
+  FiCreditCard,
   FiPieChart,
   FiPlus,
   FiSearch,
@@ -26,6 +27,7 @@ interface SidebarProps {
 }
 
 const PRIMARY_VIEWS: { view: ViewKey; label: string; icon: typeof FiPieChart }[] = [
+  { view: 'accounts', label: 'Accounts', icon: FiCreditCard },
   { view: 'budget', label: 'Budget', icon: FiPieChart },
   { view: 'calendar', label: 'Calendar', icon: FiCalendar },
   { view: 'reports', label: 'Reports', icon: FiBarChart2 },
@@ -156,7 +158,13 @@ export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: Si
               >
                 <span className="dot" style={{ background: account.color }} aria-hidden="true" />
                 <span className="rail__name">{account.name}</span>
-                <span className="rail__balance">
+                <span
+                  className={`rail__balance${
+                    account.type === 'credit' && (balances.get(account.id) ?? 0) < 0
+                      ? ' amount--out'
+                      : ''
+                  }`}
+                >
                   {formatMoney(
                     balances.get(account.id) ?? 0,
                     settings.currency,

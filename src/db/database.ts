@@ -225,6 +225,9 @@ export function normalizeAccount(account: Partial<Account>): Account {
     type: account.type ?? 'checking',
     color: account.color ?? '#58a6ff',
     openingBalance: wholeCents(account.openingBalance),
+    ...(Number.isFinite(account.creditLimit)
+      ? { creditLimit: wholeCents(account.creditLimit) }
+      : {}),
     ...(account.currency ? { currency: account.currency } : {}),
     archived: account.archived ?? false,
     order: account.order ?? 0,

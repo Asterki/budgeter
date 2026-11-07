@@ -234,7 +234,14 @@ export function TransactionsView({
             {scopedAccount && (
               <>
                 {' · '}balance{' '}
-                <strong>
+                <strong
+                  className={
+                    scopedAccount.type === 'credit' &&
+                    accountBalance(scopedAccount, transactions) < 0
+                      ? 'amount--out'
+                      : undefined
+                  }
+                >
                   {formatMoney(accountBalance(scopedAccount, transactions), settings.currency, settings.locale, hidden)}
                 </strong>
               </>

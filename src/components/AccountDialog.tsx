@@ -27,6 +27,9 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
   const [opening, setOpening] = useState(
     account ? (account.openingBalance / 100).toFixed(2) : '0.00',
   );
+  const [creditLimit, setCreditLimit] = useState(
+    account?.creditLimit ? (account.creditLimit / 100).toFixed(2) : '',
+  );
   const [color, setColor] = useState(account?.color ?? ACCOUNT_COLORS[0]);
   const [archived, setArchived] = useState(account?.archived ?? false);
 
@@ -35,11 +38,22 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
     if (!name.trim()) return;
     const parsed = parseAmount(opening);
     const openingBalance = Number.isFinite(parsed) ? parsed : 0;
+    const parsedLimit = parseAmount(creditLimit);
+    const limit = type === 'credit' && Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? Math.round(parsedLimit)
+      : 0;
 
     if (account) {
-      updateAccount(account.id, { name: name.trim(), type, openingBalance, color, archived });
+      updateAccount(account.id, {
+        name: name.trim(),
+        type,
+        openingBalance,
+        creditLimit: limit,
+        color,
+        archived,
+      });
     } else {
-      createAccount({ name: name.trim(), type, openingBalance, color });
+      createAccount({ name: name.trim(), type, openingBalance, creditLimit: limit, color });
     }
     onClose();
   }
@@ -104,6 +118,23 @@ export function AccountDialog({ account, onClose }: AccountDialogProps) {
             />
           </label>
         </div>
+
+        {type === 'credit' && (
+          <label className="field">
+            <span className="field__label">Credit limit</span>
+            <input
+              className="input input--money"
+              inputMode="decimal"
+              value={creditLimit}
+              onChange={(event) => setCreditLimit(event.target.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              placeholder="Optional"
+            />
+            <span className="field__hint">
+              Balances below zero count towards this limit and are shown as money owed.
+            </span>
+          </label>
+        )}
 
         <ColorPicker colors={ACCOUNT_COLORS} value={color} onChange={setColor} />
 

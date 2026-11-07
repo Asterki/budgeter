@@ -2,6 +2,7 @@
 
 export type ViewKey =
   | 'transactions'
+  | 'accounts'
   | 'budget'
   | 'calendar'
   | 'reports'

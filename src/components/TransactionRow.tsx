@@ -33,8 +33,16 @@ export function TransactionRow({
   onOpen,
 }: TransactionRowProps) {
   const isTransfer = transaction.type === 'transfer';
+  // A transfer has two mirrored rows. Describe where this row's money goes
+  // rather than showing the other account as if it were this row's account.
+  const transferLabel =
+    isTransfer && transferAccount
+      ? transaction.amount < 0
+        ? `Transfer to ${transferAccount.name}`
+        : `Transfer from ${transferAccount.name}`
+      : null;
   const title =
-    (isTransfer ? transferAccount?.name : payee?.name) ||
+    (isTransfer ? transferLabel : payee?.name) ||
     transaction.notes.trim() ||
     category?.name ||
     (isTransfer ? 'Transfer' : 'Untitled transaction');
