@@ -82,12 +82,12 @@ const idleStatus: SyncStatus = {
   error: null,
 };
 
-let status: SyncStatus = { ...idleStatus };
-let runtime: { config: SyncConfig; clock: HlcClock } | null = null;
+let status: SyncStatus = { ...idleStatus };let runtime: { config: SyncConfig; clock: HlcClock } | null = null;
 let applyHandler: (() => void) | null = null;
-let syncPromise: Promise<void> | null = null;
+let syncPromise: Promise<SyncResult> | null = null;
 let pollTimer: number | null = null;
 let hlcTimer: number | null = null;
+let firstPullDone = false;
 let bound = false;
 let failures = 0;
 let retryAt = 0;
@@ -295,6 +295,9 @@ export async function connectSync(
     if (head.exists) await snapshotPull(config);
     await pushPending(config);
     await pullAll(config);
+    // A joining device must repaint even when its cursor already sat at head.
+    applyHandler?.();
+    firstPullDone = true;
     config.lastSyncAt = Date.now();
     await writeSyncState('app', config);
     publish({
@@ -436,21 +439,27 @@ export async function loadSyncRuntime(): Promise<void> {
   void syncNow();
 }
 
-export function syncNow(): Promise<void> {
-  if (!runtime) return Promise.resolve();
+export interface SyncResult {
+  applied: number;
+  error: string | null;
+}
+
+export function syncNow(): Promise<SyncResult> {
+  const idle: SyncResult = { applied: 0, error: null };
+  if (!runtime) return Promise.resolve(idle);
   if (syncPromise) return syncPromise;
-  if (Date.now() < retryAt) return Promise.resolve();
+  if (Date.now() < retryAt) return Promise.resolve(idle);
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     publish({ state: 'idle', error: 'Offline — changes are queued.' });
-    return Promise.resolve();
+    return Promise.resolve(idle);
   }
 
-  syncPromise = withLock(async () => {
-    if (!runtime) return;
+  const run = withLock(async () => {
+    if (!runtime) return idle;
     publish({ state: 'syncing', error: null });
     try {
       await pushPending(runtime.config);
-      const changed = await pullAll(runtime.config);
+      const applied = await pullAll(runtime.config);
       runtime.config.lastSyncAt = Date.now();
       await writeSyncState('app', runtime.config);
       failures = 0;
@@ -461,30 +470,36 @@ export function syncNow(): Promise<void> {
         lastSyncAt: runtime.config.lastSyncAt,
         error: null,
       });
-      if (changed) applyHandler?.();
+      // Repaint when something actually changed, and once on the first sync of
+      // the session so a device that was already at head still shows the data.
+      if (applied > 0 || !firstPullDone) applyHandler?.();
+      firstPullDone = true;
+      return { applied, error: null };
     } catch (error) {
       failures += 1;
       retryAt = Date.now() + Math.min(300_000, 5_000 * 2 ** Math.min(failures - 1, 6));
-      publish({
-        state: 'error',
-        error: error instanceof Error ? error.message : 'Sync failed.',
-      });
+      const message = error instanceof Error ? error.message : 'Sync failed.';
+      publish({ state: 'error', error: message });
+      return { applied: 0, error: message };
     }
-  }).finally(() => {
-    syncPromise = null;
   });
+
+  syncPromise = run
+    .then((result) => result ?? idle)
+    .finally(() => {
+      syncPromise = null;
+    });
 
   return syncPromise;
 }
 
-async function withLock(task: () => Promise<void>): Promise<void> {
+async function withLock<T>(task: () => Promise<T>): Promise<T | undefined> {
   if (typeof navigator === 'undefined' || !('locks' in navigator)) {
-    await task();
-    return;
+    return task();
   }
-  await navigator.locks.request('budget-sync', { ifAvailable: true }, async (lock) => {
-    if (!lock) return;
-    await task();
+  return navigator.locks.request('budget-sync', { ifAvailable: true }, async (lock) => {
+    if (!lock) return undefined;
+    return task();
   });
 }
 
@@ -516,8 +531,8 @@ async function pushPending(config: SyncConfig): Promise<void> {
   }
 }
 
-async function pullAll(config: SyncConfig): Promise<boolean> {
-  let changed = false;
+async function pullAll(config: SyncConfig): Promise<number> {
+  let applied = 0;
   try {
     for (;;) {
       const page = await request<ChangesPage>(
@@ -526,7 +541,7 @@ async function pullAll(config: SyncConfig): Promise<boolean> {
         `/v1/sync/changes?since=${config.cursor}&limit=${BATCH}`,
       );
       for (const change of page.changes) {
-        if (await applyRemote(config, change)) changed = true;
+        if (await applyRemote(config, change)) applied += 1;
       }
       config.cursor = Math.max(config.cursor, page.cursor);
       await writeSyncState('app', config);
@@ -535,19 +550,21 @@ async function pullAll(config: SyncConfig): Promise<boolean> {
   } catch (error) {
     if (error instanceof HttpError && error.status === 410) {
       // The relay purged history past our cursor; start again from a snapshot.
-      changed = await snapshotPull(config);
+      applied += await snapshotPull(config);
     } else {
       throw error;
     }
   }
-  return changed;
+  return applied;
 }
 
-async function snapshotPull(config: SyncConfig): Promise<boolean> {
-  let changed = false;
+async function snapshotPull(config: SyncConfig): Promise<number> {
+  let applied = 0;
   let afterType = '';
   let afterId = '';
-  let head = config.cursor;
+  // The first page fixes the head. Every later page passes it back so the
+  // whole sequence sees one consistent boundary even while the relay moves.
+  let pinnedHead: number | null = null;
 
   for (;;) {
     const query = new URLSearchParams({ limit: String(BATCH) });
@@ -555,15 +572,16 @@ async function snapshotPull(config: SyncConfig): Promise<boolean> {
       query.set('afterType', afterType);
       query.set('afterId', afterId);
     }
+    if (pinnedHead !== null) query.set('head', String(pinnedHead));
     const page = await request<SnapshotPage>(
       config.serverUrl,
       config.authKey,
       `/v1/sync/snapshot?${query.toString()}`,
     );
-    head = page.head;
+    if (pinnedHead === null) pinnedHead = page.head;
 
     for (const entity of page.entities) {
-      if (await applyRemote(config, entity)) changed = true;
+      if (await applyRemote(config, entity)) applied += 1;
     }
 
     if (!page.next) break;
@@ -571,9 +589,11 @@ async function snapshotPull(config: SyncConfig): Promise<boolean> {
     afterId = page.next.id;
   }
 
-  config.cursor = Math.max(config.cursor, head);
+  config.cursor = Math.max(config.cursor, pinnedHead ?? 0);
   await writeSyncState('app', config);
-  return changed;
+  // Anything that landed after the pinned head is still owed to us.
+  applied += await pullAll(config);
+  return applied;
 }
 
 /* ── Merge ────────────────────────────────────────────────────────────────── */
@@ -587,43 +607,47 @@ async function applyRemote(
   if (!ENTITY_KINDS.includes(change.entityType)) return false;
   runtime?.clock.observe(change.hlc);
 
-  const stored = await getVersion(change.entityType, change.entityId);
-  if (stored && compareHlc(change.hlc, stored.hlc) <= 0) return false;
+  // One exclusive slot for the compare and the write: a local edit landing
+  // between them would otherwise leave the entity and its version disagreeing.
+  return runExclusive(async () => {
+    const stored = await getVersion(change.entityType, change.entityId);
+    if (stored && compareHlc(change.hlc, stored.hlc) <= 0) return false;
 
-  if (change.deleted) {
-    if (change.entityType === 'transaction') {
-      await deleteTransferPartner(change.entityId, change.hlc);
+    if (change.deleted) {
+      if (change.entityType === 'transaction') {
+        await deleteTransferPartner(change.entityId, change.hlc);
+      }
+      await deleteEntitySilently(change.entityType, change.entityId);
+      await putVersion({
+        entityType: change.entityType,
+        entityId: change.entityId,
+        hlc: change.hlc,
+        deleted: true,
+      });
+      return true;
     }
-    await deleteEntitySilently(change.entityType, change.entityId);
+
+    let payload: unknown;
+    try {
+      payload = await decryptPayload<unknown>(change.payload, config.encKey);
+    } catch {
+      // A payload from a different passphrase can never decrypt; skip it rather
+      // than blocking every later change behind a poison record.
+      console.warn('Skipping a sync change that could not be decrypted.');
+      return false;
+    }
+    const mergedSettings = await writeMerged(change.entityType, change.entityId, payload);
     await putVersion({
       entityType: change.entityType,
       entityId: change.entityId,
       hlc: change.hlc,
-      deleted: true,
+      deleted: false,
     });
+    // If the merge added local-only achievements or counters, publish the union
+    // back so the other device receives it too.
+    if (mergedSettings) await enqueueSettings(mergedSettings);
     return true;
-  }
-
-  let payload: unknown;
-  try {
-    payload = await decryptPayload<unknown>(change.payload, config.encKey);
-  } catch {
-    // A payload from a different passphrase can never decrypt; skip it rather
-    // than blocking every later change behind a poison record.
-    console.warn('Skipping a sync change that could not be decrypted.');
-    return false;
-  }
-  const mergedSettings = await writeMerged(change.entityType, change.entityId, payload);
-  await putVersion({
-    entityType: change.entityType,
-    entityId: change.entityId,
-    hlc: change.hlc,
-    deleted: false,
   });
-  // If the merge added local-only achievements or counters, publish the union
-  // back so the other device receives it too.
-  if (mergedSettings) await enqueueSettings(mergedSettings);
-  return true;
 }
 
 async function enqueueSettings(settings: Settings): Promise<void> {
