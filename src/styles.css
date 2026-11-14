@@ -489,7 +489,7 @@ kbd {
 /* ── Ledger ──────────────────────────────────────────────────────────────── */
 
 .ledger {
-  max-width: 1080px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -934,7 +934,7 @@ kbd {
 /* ── Settings ────────────────────────────────────────────────────────────── */
 
 .settings {
-  max-width: 860px;
+  max-width: 1280px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -1254,7 +1254,7 @@ kbd {
 /* ── Accounts overview ───────────────────────────────────────────────────── */
 
 .accounts-view {
-  max-width: 1080px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -1789,8 +1789,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-  padding: var(--space-lg);
-  max-width: 1100px;
+  max-width: 1280px;
   width: 100%;
   margin: 0 auto;
 }
@@ -2210,8 +2209,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
-  padding: var(--space-lg);
-  max-width: 1180px;
+  max-width: 1280px;
   width: 100%;
   margin: 0 auto;
 }
@@ -3683,4 +3681,27 @@ kbd {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ── Shared view header ──────────────────────────────────────────────────── */
+
+.ledger__head,
+.accounts-view__head,
+.budget__head,
+.calendar__head,
+.forecast__head,
+.reports__head,
+.settings__head {
+  align-items: flex-end;
+}
+
+.ledger__title,
+.budget__title,
+.calendar__title,
+.forecast__title,
+.reports__title,
+.settings__title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
 }

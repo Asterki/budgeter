@@ -316,10 +316,6 @@ export function TransactionsView({
             <FiDownload aria-hidden="true" />
             <span>CSV</span>
           </button>
-          <button type="button" className="button button--primary" onClick={onNewTransaction}>
-            <FiPlus aria-hidden="true" />
-            <span>New</span>
-          </button>
         </div>
       </div>
 
