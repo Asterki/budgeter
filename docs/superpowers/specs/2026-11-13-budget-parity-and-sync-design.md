@@ -169,11 +169,14 @@ Removed from the top bar, with new homes:
 
 Order, single source of truth, mirroring Tasker's shape:
 
-1. **Views** — All transactions, Today (planned for today), Upcoming, Uncategorized
-2. **Accounts** — heading with inline `+`; active accounts with dot/name/balance; collapsed Archived group
-3. **Categories** — group rows with their 3-category subtitle
-4. **Payees** — search + top 12 by count
-5. **Footer** — Settings
+1. **Views** — All transactions, Uncategorized
+2. **Planning** — Budget, Forecast, Reports, Calendar
+3. **Accounts** — heading with inline `+`; active accounts with dot/name/balance; collapsed Archived group
+4. **Categories** — group rows with their 3-category subtitle
+5. **Payees** — search + top 12 by count
+6. **Footer** — Settings
+
+Desktop has no tab bar and no More, so the rail is the *only* route to Budget, Forecast, Reports and Calendar. The Planning group exists for that reason and is the desktop equivalent of the mobile More list — the same four destinations, same order, so the two surfaces teach each other.
 
 Active state: `background: var(--surface-variant); font-weight: 600`, 6px radius, no left bar. Counts right-aligned in mono. Fix scrolling with `height:100%; min-height:0` on the shell and `overflow-y:auto` on `.rail__scroll`.
 
@@ -196,7 +199,9 @@ Cell: icon above a 12px label, active = `inset 0 2px 0 var(--accent)` plus weigh
 
 **Cold open is Transactions, always.** No persistence of last view. `?action=add` still overrides.
 
-**Zero-navigation capture.** The `QuickAdd` field is the first thing under the Transactions header on both desktop and mobile, and on a **cold launch** (mobile only) it takes focus so the keyboard is already up. It does **not** re-focus on later tab switches or when returning from a detail view — that would steal focus mid-task.
+**Zero-navigation capture.** The `QuickAdd` field is the first thing under the Transactions header on both desktop and mobile, and on a **cold launch** (mobile only) it takes focus with a visible caret. It does **not** re-focus on later tab switches or when returning from a detail view — that would steal focus mid-task.
+
+*Platform caveat, accepted:* iOS will not raise the software keyboard for a programmatic `focus()` without a user gesture. On the phone, "focused and ready" is the honest target; the keyboard may still require the first tap. What this does change: the shell must be `100dvh`-based with the composer at the top of the scroll container, so an opened keyboard can never hide the field you just focused.
 
 **FAB** — 48×48, accent, 6px radius, sitting `calc(60px + 16px + env(safe-area-inset-bottom))` from the bottom, z 55, opens the "New transaction" sheet. Retained alongside the inline field because you may add from Accounts or Budget without first navigating home.
 
@@ -219,7 +224,7 @@ interface BottomSheetProps {
 
 Behaviour to reproduce exactly: unmounts when closed (no exit animation); backdrop `var(--overlay)` at z 100 with click-to-close; `max-height: 92vh`; 6px top corners; 32×4 grab handle; drag-to-dismiss on the grab zone using pointer capture, closing past 28% of height or 0.7 px/ms velocity; `Escape` closes; enter animation `sheet-up 240ms cubic-bezier(0.22,1,0.36,1)`; `padding-bottom: env(safe-area-inset-bottom)`.
 
-Used for: New transaction, Transaction detail, More (if a sheet is wanted later), User manual, and every dialog's mobile presentation.
+Used for: New transaction, Transaction detail, every dialog's mobile presentation, and the mobile More destination list if a sheet proves better than a view. Budget has no in-app user manual and this work does not add one — `USER_MANUAL.md` stays a repo document.
 
 ### 8.6 Dialogs
 
@@ -261,7 +266,7 @@ Keep Budget's theme ids and palette *values* mostly, but add the missing primiti
 ### 8.9 Feedback and layering
 
 - **Toasts:** app-level layer at z 320, top-center under the top bar, 6px radius, max 3, auto-dismiss 3.6s. Replaces the ad-hoc `.notice`/`window.alert` mix. Sync failures surface here, not only in Settings.
-- **Undo pill:** bottom-center, 6s, for deletes.
+- **Undo pill:** bottom-center, 6s, **transaction deletes only**. The delete applies immediately; Undo re-inserts the same ids with a fresh HLC, which beats the tombstone under LWW without needing to cancel a pushed delete. Cascading deletes (account, category, payee, group) are **not** undoable — they keep a `ConfirmDialog` and re-creating them is not a faithful inverse.
 - **Z ladder:** topbar 40, suggest 45, tabbar 50, FAB 55, HUD 60/61, modal 90, sheet 100, toasts 320. (Fixes reward toasts being hidden behind modals.)
 - **Loading:** keep the single boot screen. Mutations stay optimistic write-through with no spinners.
 
@@ -287,29 +292,34 @@ Server first, client second. The server must accept both current and patched cli
 
 `server/src/`:
 
-1. **Report applied vs accepted.** In `POST /v1/sync/push`, after each `upsertEntity` (which is gated on `excluded.hlc > entities.hlc`), re-read the entity's HLC and compare to the change's HLC. Return `changes: [{ changeId, applied: boolean }]` alongside the existing `accepted` / `duplicates` / `cursor` fields. Current clients ignore the extra field; patched clients use it. No migration, no protocol bump.
+1. **Report a verdict for every requested change.** In `POST /v1/sync/push`, after each `upsertEntity` (gated on `excluded.hlc > entities.hlc`), re-read the entity and compare. Every `changeId` the client sent gets an entry in `changes: [{ changeId, applied: boolean }]` — **including duplicates**, where `applied` is true if the relay already holds that HLC for that entity. Absence must never mean "applied". This is what makes invariant 2 achievable. Response also keeps `accepted` / `duplicates` / `cursor` unchanged.
 2. **Pin the snapshot head.** Accept an optional `head` query param on `GET /v1/sync/snapshot`; when present, serve that head instead of the current one. Current clients omit it and get today's behaviour.
 3. **`Cache-Control: no-store`** on every `/v1/sync/*` response.
-4. **Do not 400 the whole batch for one bad record.** Validate per change and return per-change `{ changeId, error }`, still applying the valid ones.
+4. **Per-change validation, opt-in.** A client that sends `x-budget-sync-acks: 1` gets per-change `{ changeId, error }` in a 200, with valid changes still applied. A client without that header keeps today's behaviour exactly: the whole batch is rejected with 4xx. Without the opt-in, an un-updated phone would silently discard rejected rows — this header is what keeps the deploy window safe in both directions.
 5. Keep `schema: 6`, `protocol: 2`, existing tables, existing retention.
 
 ### 9.4 Client: close the divergence
 
 `src/sync/` and `src/db/database.ts`:
 
-1. **Atomic apply.** `applyRemote` performs version-compare, entity write, and version write inside **one** IndexedDB `readwrite` transaction spanning `[entityStore, sync_versions]`. The gate becomes a true compare-and-set.
-2. **Monotonic recorder.** The recorder's version write only proceeds if `newHlc > storedHlc`. Local writes and remote applies for the same entity serialize through a per-entity async lock (`withEntityLock(entityType, entityId, fn)`) so they cannot interleave across the transaction boundary.
-3. **Outbox removal on acknowledgement.** `pushPending` deletes outbox rows only where `applied === true`. Where `applied === false`, the row is dropped *and* the winner is fetched by pulling from `cursor` (which still precedes that change) — the existing pull does this, provided we do not advance past it.
+1. **Atomic apply — including the local path.** Version-compare, entity write, and version write happen inside **one** IndexedDB `readwrite` transaction spanning `[entityStore, sync_versions, sync_outbox]`. This forces a change to `src/db/database.ts`: the write primitives become version-aware. `putValue`/`putValues` accept the HLC being written and perform the compare-and-set inside their own transaction, returning `{ written: boolean }`. A local write whose HLC loses to the stored version **does not write the entity at all**. Applying only the version gate while letting a losing entity write land would leave newer content overwritten by older content with no pull able to repair it — the exact divergence we are removing.
+
+2. **One monotonic clock, two writers, one lock.** The recorder takes its HLC *before* opening the transaction that persists entity + version + outbox, so the same HLC that gates the write is the one that is stored and pushed. Local writes and remote applies for the same entity serialize through `withEntityLock(entityType, entityId, fn)` so they cannot interleave across transaction boundaries.
+3. **Outbox removal on acknowledgement.** `pushPending` deletes outbox rows only where `applied === true`. Where `applied === false`, the row is dropped *and* the winner is fetched by pulling from `cursor` (which still precedes that change) — the existing pull does this, provided we do not advance past it. If the response carries no `changes` array at all (old server mid-deploy, or after a server rollback), fall back to today's behaviour and treat 2xx as applied; the client must never wedge because a field is missing.
 4. **Persist the observed clock.** `observe()` updates `config.lastHlc` monotonically and writes it (debounced, at most once per second) so a reload never restarts the clock below records already held. `HlcClock` initialises to `max(persisted, wall clock)`.
 5. **Refresh after every applied change.** `syncNow` invokes `applyHandler` whenever `applied > 0` **or** when this is the first sync of the session. `connectSync` invokes it unconditionally after `snapshotPull` and after the follow-up `pullAll`.
 6. **Pinned snapshot + tail pull.** `snapshotPull` takes `head` from page 1, passes it on every page, sets `cursor` to that head, then runs `pullAll` to pick up anything after it.
 7. **Boot reconciliation.** After `loadSyncRuntime`, scan every domain store for rows with no version and seed them (outbox + version). Fixes the class of rows written before the recorder was wired.
-8. **Gate background writers.** `catchUpRecurring` and `evaluateClosedMonths` run only after the first sync of the session completes (`initialSyncDone`), so they never race the initial pull and never stamp stale HLCs.
+8. **Gate background writers on the first sync *attempt*, not its success.** `catchUpRecurring` and `evaluateClosedMonths` wait for the boot sync to settle **or** 2 seconds to elapse, whichever comes first, success or failure. A phone that boots offline must still materialise its recurring rows — offline operation is a hard requirement and the phone is the primary device. The gate covers only the boot/visibility auto-run; explicit calls from `TransactionDetail`, `RecurringDialog` and `SettingsView` are unaffected, since a rule you just created has to produce its rows immediately.
 9. **Poison isolation.** On a 4xx for a batch, retry per record; a record that still fails is quarantined into `sync_state` (not deleted, not retried) and the queue continues. Surface the quarantine count in Settings.
-10. **Disconnect fencing.** `connectSync`/`disconnectSync` bump a generation token; an in-flight `pullAll`/`pushPending` from an older generation may not write `sync_state`, `cursor`, or entities. `connectSync` always clears leftover store content when starting a new space, whether or not a runtime existed.
-11. **Transfer pair reconcile.** After each successful sync, a repair pass compares the two legs of every transfer pair and copies the newer leg's fields to the older one. Deletes keep their existing cascade, extended to fire even when the receiving leg is absent but a local orphan with the same `transferPairId` exists.
+10. **Disconnect fencing.** `connectSync`/`disconnectSync` bump a generation token; an in-flight `pullAll`/`pushPending` from an older generation may not write `sync_state`, `cursor`, or entities. `connectSync` clears **sync metadata only** — outbox, versions, cursor, status — never domain rows. Domain data is merged exactly as today: remote history wins by HLC, local-only rows are seeded into the space. Connecting to a different space must not delete a row that exists only on this device.
+11. **Transfer pair reconcile.** The legs are deliberately asymmetric — `amount` is sign-mirrored and `accountId`/`transferAccountId` are swapped — so a naive field copy would move money. The shared field set is: **date, notes, tags, cleared, and the absolute magnitude**, plus `transferPairId`. The repair copies only those, mirrors the sign and swaps the accounts, and is a **no-op when they already match**. It stamps the *winner's* HLC onto the losing leg — a synthetic remote apply — so both legs carry the same HLC and neither device can keep declaring itself newer. Stamping a fresh HLC instead would make each repair a local edit, and two devices would ping-pong forever. Deletes keep their existing cascade, extended to fire when the receiving leg is absent but a local orphan with the same `transferPairId` exists.
 12. **Settings payload freshness.** Push serialises settings from the **currently persisted** row, not from the captured snapshot, so a progress write cannot republish a stale theme/currency.
-13. **Skipped records.** Unknown or undecryptable changes advance the cursor (to avoid a wedged loop) but record `{changeId, reason}` in `sync_state.skipped`; the presence of skipped records sets status to `degraded` and enables a "Repair from snapshot" action.
+13. **Skipped records and repair.** Unknown or undecryptable changes advance the cursor (a wedged loop helps nobody) and record `{changeId, reason}` in `sync_state.skipped`, setting status to `degraded`.
+
+    "Repair from snapshot" is the recovery action, and it must **bypass the version gate** for every entity present in the snapshot — a gated repair would be rejected by exactly the drifted versions it exists to fix. Entities present locally but absent from the snapshot are **kept and re-seeded into the space**, never deleted.
+
+    Undecryptable payloads are the one case repair cannot solve: a snapshot cannot decrypt what a change could not. If any skipped record is undecryptable, status becomes `degraded` with an explicit "records encrypted with a different key" message and the only remedy offered is re-pairing with the correct passphrase. That is a surfaced, explained state rather than silent loss — and it is the honest limit of "no re-pairing".
 
 ### 9.5 Polling
 
@@ -376,6 +386,22 @@ Each stage ends with `pnpm typecheck` and `pnpm build`; the app must boot with n
 7. **Interval 5 s, not 10 s.** You asked for "updated in 10 seconds"; polling at half the budget keeps you under it with margin.
 8. **No accessible-name/keyboard work beyond what already exists.** Explicitly your call.
 9. **Server deploy is required for full correctness**, but the client fixes alone remove the two observed failure modes; the server change closes the "acknowledged but not applied" gap.
+10. **Rail gains a Planning group** (Budget, Forecast, Reports, Calendar). Tasker's rail carries every view, and desktop has no tab bar, so without this those four would be unreachable with a mouse.
+11. **No "Today" / "Upcoming" rail views.** The ledger already renders its "Upcoming — next 30 days" block, and turning planned occurrences into first-class scoped views would invent a row type that has no entity. Dropped rather than guessed at.
+12. **Undo covers transactions only.** Cascading deletes stay behind a confirm.
+13. **No in-app user manual.** Tasker has one; Budget has `USER_MANUAL.md` on disk and adding a screen of content is out of scope for a parity pass.
+14. **iOS keyboard caveat accepted** — field focused on cold open, keyboard may need the first tap, and the shell is `100dvh` so the field can never be hidden by the keyboard.
+
+## 12a. Review resolutions
+
+An independent builder read this document cold and flagged twelve places where a wrong guess would have mattered. All are now settled above; the ones that changed the design rather than clarifying it:
+
+- **The local write path must be version-aware too.** Gating only the version left a hole where a losing local entity write lands with newer content under an older version, and nothing repairs it. `database.ts` write primitives now take the HLC and refuse the write. This is the single most important correction.
+- **Repair must bypass the version gate**, or it cannot repair the drift it exists for.
+- **Per-change errors are opt-in via a header**, so an un-updated phone keeps today's whole-batch rejection instead of silently discarding rows.
+- **Background writers gate on the first attempt, not success**, with a 2s timeout — otherwise an offline phone never materialises its recurring rows.
+- **Transfer repair copies shared fields only, mirrored, and stamps the winner's HLC** — a fresh HLC would make two devices ping-pong forever.
+- **`connectSync` clears sync metadata only**, never domain rows.
 
 ## 13. Left to the builder
 
