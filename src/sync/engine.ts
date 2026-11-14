@@ -14,6 +14,7 @@ import {
   getVersion,
   listOutbox,
   listVersions,
+  markVersionAcked,
   normalizeAccount,
   normalizeBudget,
   normalizeCategory,
@@ -32,6 +33,7 @@ import {
   writeEntitySilently,
   writeSyncState,
   type EntityKind,
+  type OutboxRecord,
 } from '../db/database';
 import type { Settings, Transaction } from '../domain/types';
 import { mergeProgress } from '../domain/progress';
@@ -49,6 +51,8 @@ import { configureRecorder, entityPayload } from './recorder';
 import {
   NewSyncSpaceError,
   type ChangesPage,
+  type PushResponse,
+  type QuarantinedChange,
   type RemoteChange,
   type RemoteEntity,
   type SnapshotPage,
@@ -56,6 +60,8 @@ import {
   type SyncInfo,
   type SyncStatus,
 } from './types';
+
+const ACKS_HEADER = 'x-budget-sync-acks';
 
 const ENTITY_KINDS: EntityKind[] = [
   'account',
@@ -295,6 +301,7 @@ export async function connectSync(
     if (head.exists) await snapshotPull(config);
     await pushPending(config);
     await pullAll(config);
+    await dropSuperseded();
     // A joining device must repaint even when its cursor already sat at head.
     applyHandler?.();
     firstPullDone = true;
@@ -537,6 +544,7 @@ export function syncNow(): Promise<SyncResult> {
     try {
       await pushPending(runtime.config);
       const applied = await pullAll(runtime.config);
+      await dropSuperseded();
       runtime.config.lastSyncAt = Date.now();
       await writeSyncState('app', runtime.config);
       failures = 0;
@@ -582,30 +590,118 @@ async function withLock<T>(task: () => Promise<T>): Promise<T | undefined> {
 
 /* ── Push / pull ──────────────────────────────────────────────────────────── */
 
+async function sendPush(config: SyncConfig, batch: OutboxRecord[]): Promise<PushResponse> {
+  const changes = await Promise.all(
+    batch.map(async (row) => ({
+      changeId: row.changeId,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      hlc: row.hlc,
+      deleted: row.deleted,
+      payload: row.deleted ? '' : await encryptPayload(row.payload, config.encKey),
+    })),
+  );
+  return request<PushResponse>(config.serverUrl, config.authKey, '/v1/sync/push', {
+    method: 'POST',
+    headers: { [ACKS_HEADER]: '1' },
+    body: JSON.stringify({ clientId: config.clientId, changes }),
+  });
+}
+
+/**
+ * Sends the batch one record at a time to find the one the relay rejects, so a
+ * single malformed row cannot wedge the whole queue forever.
+ */
+async function isolatePoisonRows(
+  config: SyncConfig,
+  batch: OutboxRecord[],
+  blocked: Set<string>,
+): Promise<QuarantinedChange[]> {
+  const stuck: QuarantinedChange[] = [];
+  for (const row of batch) {
+    try {
+      await sendPush(config, [row]);
+    } catch (error) {
+      if (error instanceof HttpError && error.status >= 400 && error.status < 500) {
+        stuck.push({ changeId: row.changeId, reason: error.message });
+        blocked.add(row.changeId);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return stuck;
+}
+
+async function readQuarantine(): Promise<QuarantinedChange[]> {
+  return (await readSyncState<QuarantinedChange[]>('quarantined')) ?? [];
+}
+
 async function pushPending(config: SyncConfig): Promise<void> {
+  const quarantine = await readQuarantine();
+  const blocked = new Set(quarantine.map((entry) => entry.changeId));
+
   for (let round = 0; round < 50; round += 1) {
-    const pending = await listOutbox();
+    const pending = (await listOutbox()).filter((row) => !blocked.has(row.changeId));
     if (pending.length === 0) return;
     const batch = pending.slice(0, BATCH);
+    const cursorAtStart = config.cursor;
 
-    const changes = await Promise.all(
-      batch.map(async (row) => ({
-        changeId: row.changeId,
-        entityType: row.entityType,
-        entityId: row.entityId,
-        hlc: row.hlc,
-        deleted: row.deleted,
-        payload: row.deleted ? '' : await encryptPayload(row.payload, config.encKey),
-      })),
-    );
+    let response: PushResponse | null = null;
+    try {
+      response = await sendPush(config, batch);
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.status < 400 || error.status >= 500) throw error;
+      const stuck = await isolatePoisonRows(config, batch, blocked);
+      if (stuck.length > 0) {
+        quarantine.push(...stuck);
+        await writeSyncState('quarantined', quarantine);
+      }
+      if (stuck.length === 0) throw error;
+    }
 
-    await request(config.serverUrl, config.authKey, '/v1/sync/push', {
-      method: 'POST',
-      body: JSON.stringify({ clientId: config.clientId, changes }),
-    });
-    await removeOutbox(batch.map((row) => row.changeId));
+    if (response) {
+      const verdicts = response.changes;
+      if (verdicts) {
+        const byId = new Map(verdicts.map((verdict) => [verdict.changeId, verdict]));
+        const appliedRows = batch.filter((row) => byId.get(row.changeId)?.applied);
+        for (const row of appliedRows) {
+          await markVersionAcked(row.entityType, row.entityId, row.hlc);
+        }
+        // A change the relay did not apply has already lost to a newer record
+        // that lives on the relay. Dropping it here would lose the local edit
+        // silently, so it stays queued until the pull supersedes it.
+        await removeOutbox(appliedRows.map((row) => row.changeId));
+        const rejected = batch.filter((row) => byId.get(row.changeId)?.applied !== true);
+        if (rejected.length > 0) {
+          // Rewind so the following pull re-delivers the winning record.
+          config.cursor = Math.min(config.cursor, cursorAtStart);
+        }
+      } else {
+        // Older relay without per-change verdicts: a 200 is the only signal.
+        await removeOutbox(batch.map((row) => row.changeId));
+        for (const row of batch) {
+          await markVersionAcked(row.entityType, row.entityId, row.hlc);
+        }
+      }
+    }
+
+    const remaining = (await listOutbox()).filter((row) => !blocked.has(row.changeId));
+    if (remaining.length === 0) return;
     if (pending.length <= BATCH) return;
   }
+}
+
+/** Drops queued changes the relay has already superseded. */
+async function dropSuperseded(): Promise<void> {
+  const stale: string[] = [];
+  for (const row of await listOutbox()) {
+    const version = await getVersion(row.entityType, row.entityId);
+    if (version && version.hlc !== row.hlc && compareHlc(row.hlc, version.hlc) < 0) {
+      stale.push(row.changeId);
+    }
+  }
+  if (stale.length > 0) await removeOutbox(stale);
 }
 
 async function pullAll(config: SyncConfig): Promise<number> {

@@ -64,6 +64,31 @@ export interface SnapshotPage {
   head: number;
 }
 
+/** The relay's verdict for one pushed change. */
+export interface PushVerdict {
+  changeId: string;
+  applied: boolean;
+  error?: string;
+}
+
+export interface PushResponse {
+  accepted: string[];
+  duplicates: number;
+  cursor: number;
+  /**
+   * Present only when the request opted in with `x-budget-sync-acks: 1`.
+   * One entry per requested change, in request order. When it is absent the
+   * relay is an older build and a 200 means "the whole batch landed".
+   */
+  changes?: PushVerdict[];
+}
+
+/** A change the relay refuses to accept, kept out of the way of the queue. */
+export interface QuarantinedChange {
+  changeId: string;
+  reason: string;
+}
+
 /** Thrown before a connection when the passphrase has no remote data yet. */
 export class NewSyncSpaceError extends Error {
   constructor() {

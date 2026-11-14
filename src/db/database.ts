@@ -757,6 +757,23 @@ export async function putVersion(version: VersionRecord): Promise<void> {
   await transactionDone(tx);
 }
 
+export async function markVersionAcked(
+  kind: EntityKind,
+  id: string,
+  hlc: string,
+): Promise<void> {
+  const database = await openDatabase();
+  const tx = database.transaction(SYNC_STORE.versions, 'readwrite');
+  const store = tx.objectStore(SYNC_STORE.versions);
+  const row = await request(
+    store.get([kind, id]) as IDBRequest<VersionRecord | undefined>,
+  );
+  // Only clear the flag if the version is still the one that was acknowledged:
+  // a newer local edit has its own pending change.
+  if (row && row.hlc === hlc && row.queued) store.put({ ...row, queued: false });
+  await transactionDone(tx);
+}
+
 export async function listVersions(): Promise<VersionRecord[]> {
   const database = await openDatabase();
   const tx = database.transaction(SYNC_STORE.versions, 'readonly');
