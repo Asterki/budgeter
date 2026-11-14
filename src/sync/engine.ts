@@ -94,6 +94,13 @@ let syncPromise: Promise<SyncResult> | null = null;
 let pollTimer: number | null = null;
 let hlcTimer: number | null = null;
 let firstPullDone = false;
+/**
+ * Bumped whenever the user connects, disconnects or reconnects. Work that
+ * started under an older generation must not write: its `config` belongs to a
+ * space that no longer exists, and persisting it would resurrect a dead space
+ * or overwrite the new one's cursor.
+ */
+let generation = 0;
 let bound = false;
 let failures = 0;
 let retryAt = 0;
@@ -271,8 +278,22 @@ export async function connectSync(
 
   if (!head.exists && !allowCreate) throw new NewSyncSpaceError();
 
-  if (runtime) await disconnectSync();
+  // Tear down whatever was running — but only in memory and only the sync
+  // metadata. Domain rows are never cleared here: connecting to a space merges
+  // local data into it, it does not replace either side.
+  generation += 1;
+  const myGeneration = generation;
   stopLoop();
+  if (hlcTimer !== null) {
+    window.clearTimeout(hlcTimer);
+    hlcTimer = null;
+  }
+  configureRecorder(null, null);
+  runtime = null;
+  syncPromise = null;
+  failures = 0;
+  retryAt = 0;
+  await clearSyncStores();
 
   const config: SyncConfig = {
     key: 'app',
@@ -297,10 +318,14 @@ export async function connectSync(
     // conflicts, while local-only rows are still inserted. Creating a space:
     // seed with real timestamps so these rows become the canonical history.
     await seedLocal(config, head.exists ? () => epochHlc(config.clientId) : () => runtime!.clock.next());
+    if (myGeneration !== generation) return { created: !head.exists };
     await writeSyncState('app', config);
-    if (head.exists) await snapshotPull(config);
-    await pushPending(config);
-    await pullAll(config);
+    if (head.exists) await snapshotPull(config, myGeneration);
+    if (myGeneration !== generation) return { created: !head.exists };
+    await pushPending(config, myGeneration);
+    if (myGeneration !== generation) return { created: !head.exists };
+    await pullAll(config, myGeneration);
+    if (myGeneration !== generation) return { created: !head.exists };
     await dropSuperseded();
     // A joining device must repaint even when its cursor already sat at head.
     applyHandler?.();
@@ -326,6 +351,7 @@ export async function connectSync(
 }
 
 export async function disconnectSync(): Promise<void> {
+  generation += 1;
   stopLoop();
   if (hlcTimer !== null) {
     window.clearTimeout(hlcTimer);
@@ -538,12 +564,15 @@ export function syncNow(): Promise<SyncResult> {
     return Promise.resolve(idle);
   }
 
+  const gen = generation;
   const run = withLock(async () => {
-    if (!runtime) return idle;
+    if (!runtime || gen !== generation) return idle;
     publish({ state: 'syncing', error: null });
     try {
-      await pushPending(runtime.config);
-      const applied = await pullAll(runtime.config);
+      await pushPending(runtime.config, gen);
+      if (gen !== generation) return idle;
+      const applied = await pullAll(runtime.config, gen);
+      if (gen !== generation) return idle;
       await dropSuperseded();
       runtime.config.lastSyncAt = Date.now();
       await writeSyncState('app', runtime.config);
@@ -637,11 +666,12 @@ async function readQuarantine(): Promise<QuarantinedChange[]> {
   return (await readSyncState<QuarantinedChange[]>('quarantined')) ?? [];
 }
 
-async function pushPending(config: SyncConfig): Promise<void> {
+async function pushPending(config: SyncConfig, gen: number): Promise<void> {
   const quarantine = await readQuarantine();
   const blocked = new Set(quarantine.map((entry) => entry.changeId));
 
   for (let round = 0; round < 50; round += 1) {
+    if (gen !== generation) return;
     const pending = (await listOutbox()).filter((row) => !blocked.has(row.changeId));
     if (pending.length === 0) return;
     const batch = pending.slice(0, BATCH);
@@ -661,6 +691,7 @@ async function pushPending(config: SyncConfig): Promise<void> {
     }
 
     if (response) {
+      if (gen !== generation) return;
       const verdicts = response.changes;
       if (verdicts) {
         const byId = new Map(verdicts.map((verdict) => [verdict.changeId, verdict]));
@@ -704,7 +735,7 @@ async function dropSuperseded(): Promise<void> {
   if (stale.length > 0) await removeOutbox(stale);
 }
 
-async function pullAll(config: SyncConfig): Promise<number> {
+async function pullAll(config: SyncConfig, gen: number): Promise<number> {
   let applied = 0;
   try {
     for (;;) {
@@ -714,8 +745,10 @@ async function pullAll(config: SyncConfig): Promise<number> {
         `/v1/sync/changes?since=${config.cursor}&limit=${BATCH}`,
       );
       for (const change of page.changes) {
-        if (await applyRemote(config, change)) applied += 1;
+        if (gen !== generation) return applied;
+        if (await applyRemote(config, change, gen)) applied += 1;
       }
+      if (gen !== generation) return applied;
       config.cursor = Math.max(config.cursor, page.cursor);
       await writeSyncState('app', config);
       if (!page.hasMore) break;
@@ -723,7 +756,7 @@ async function pullAll(config: SyncConfig): Promise<number> {
   } catch (error) {
     if (error instanceof HttpError && error.status === 410) {
       // The relay purged history past our cursor; start again from a snapshot.
-      applied += await snapshotPull(config);
+      applied += await snapshotPull(config, gen);
     } else {
       throw error;
     }
@@ -731,7 +764,7 @@ async function pullAll(config: SyncConfig): Promise<number> {
   return applied;
 }
 
-async function snapshotPull(config: SyncConfig): Promise<number> {
+async function snapshotPull(config: SyncConfig, gen: number): Promise<number> {
   let applied = 0;
   let afterType = '';
   let afterId = '';
@@ -754,7 +787,8 @@ async function snapshotPull(config: SyncConfig): Promise<number> {
     if (pinnedHead === null) pinnedHead = page.head;
 
     for (const entity of page.entities) {
-      if (await applyRemote(config, entity)) applied += 1;
+      if (gen !== generation) return applied;
+      if (await applyRemote(config, entity, gen)) applied += 1;
     }
 
     if (!page.next) break;
@@ -762,10 +796,11 @@ async function snapshotPull(config: SyncConfig): Promise<number> {
     afterId = page.next.id;
   }
 
+  if (gen !== generation) return applied;
   config.cursor = Math.max(config.cursor, pinnedHead ?? 0);
   await writeSyncState('app', config);
   // Anything that landed after the pinned head is still owed to us.
-  applied += await pullAll(config);
+  applied += await pullAll(config, gen);
   return applied;
 }
 
@@ -774,10 +809,12 @@ async function snapshotPull(config: SyncConfig): Promise<number> {
 async function applyRemote(
   config: SyncConfig,
   change: RemoteChange | RemoteEntity,
+  gen: number,
 ): Promise<boolean> {
   // Tasker rows can still exist in an old relay. They are ignored, never merged.
   if ((LEGACY_ENTITY_TYPES as readonly string[]).includes(change.entityType)) return false;
   if (!ENTITY_KINDS.includes(change.entityType)) return false;
+  if (gen !== generation) return false;
   runtime?.clock.observe(change.hlc);
 
   // One exclusive slot for the compare and the write: a local edit landing
