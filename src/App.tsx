@@ -12,6 +12,7 @@ import { AccountDialog } from './components/AccountDialog';
 import { AppShell, useIsMobile } from './components/AppShell';
 import { Rewards } from './components/Rewards';
 import { Sidebar } from './components/Sidebar';
+import { Toasts } from './components/Toasts';
 import { TopBar } from './components/TopBar';
 import { TransactionDetail } from './components/TransactionDetail';
 import { monthRange } from './domain/budget';
@@ -140,8 +141,9 @@ export function App() {
   }
 
   return (
-    <AppShell
-      topbar={
+    <>
+      <AppShell
+        topbar={
         <TopBar
           onAdd={() => setDetail({ transactionId: null })}
           onSearch={() => {
@@ -254,6 +256,8 @@ export function App() {
       )}
 
       <Rewards settings={settings} />
-    </AppShell>
+      </AppShell>
+      <Toasts />
+    </>
   );
 }

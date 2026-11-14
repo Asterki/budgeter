@@ -17,6 +17,7 @@ import { planImport } from '../domain/import';
 import { formatMoney } from '../domain/money';
 import type { NewTransactionInput } from '../state/store';
 import { useBudget } from '../state/store';
+import { notify } from '../state/toasts';
 import { Dialog } from './Dialog';
 
 const NONE = -1;
@@ -141,7 +142,10 @@ export function CsvImportDialog({ onClose }: { onClose: () => void }) {
 
     const written = importTransactions(inputs);
     onClose();
-    window.alert(`Imported ${written} transaction${written === 1 ? '' : 's'}.`);
+    notify(
+      `Imported ${written} transaction${written === 1 ? '' : 's'}.`,
+      'success',
+    );
   }
 
   const headers = table?.headers ?? [];

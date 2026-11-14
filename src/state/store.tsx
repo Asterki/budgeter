@@ -59,6 +59,7 @@ import {
   whenInitialSyncSettles,
 } from '../sync/engine';
 import { emitReward } from './rewards';
+import { notify } from './toasts';
 
 export const ACCOUNT_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39c5cf'];
 
@@ -926,8 +927,23 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
           .map((transaction) => transaction.id)
       : [id];
     const idSet = new Set(ids);
+    const removed = transactionsRef.current.filter((transaction) => idSet.has(transaction.id));
     setTransactions((prev) => prev.filter((transaction) => !idSet.has(transaction.id)));
     void db.transactions.removeMany(ids);
+    if (removed.length === 0) return;
+    notify(
+      removed.length === 1 ? 'Transaction deleted' : `${removed.length} transactions deleted`,
+      'info',
+      {
+        label: 'Undo',
+        // Re-inserting the same ids with a fresh HLC beats the tombstone the
+        // delete just wrote, so a restored row survives the next pull.
+        run: () => {
+          setTransactions((prev) => [...removed, ...prev]);
+          void db.transactions.putMany(removed);
+        },
+      },
+    );
   }, []);
 
   const createTransfer = useCallback((input: NewTransferInput) => {
