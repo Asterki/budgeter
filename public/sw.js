@@ -78,6 +78,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Sync traffic must never be served from a cache: a stale changes or snapshot
+  // page silently hides records, which is the exact failure this cache is not
+  // allowed to cause. Let it go straight to the network.
+  if (url.pathname.startsWith('/v1/sync/')) return;
+
   // Navigations: network-first so updates land, falling back to the cached shell.
   if (request.mode === 'navigate') {
     event.respondWith(
