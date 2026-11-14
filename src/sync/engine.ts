@@ -27,6 +27,7 @@ import {
   readEntity,
   readSyncState,
   removeOutbox,
+  runExclusive,
   writeEntitySilently,
   writeSyncState,
   type EntityKind,
@@ -70,6 +71,8 @@ const ENTITY_KINDS: EntityKind[] = [
 const BATCH = 200;
 const POLL_MS = 10_000;
 const TIMEOUT_MS = 20_000;
+/** Observed remote clocks are flushed to disk at most this often. */
+const HLC_PERSIST_MS = 1_000;
 
 const idleStatus: SyncStatus = {
   configured: false,
@@ -84,6 +87,7 @@ let runtime: { config: SyncConfig; clock: HlcClock } | null = null;
 let applyHandler: (() => void) | null = null;
 let syncPromise: Promise<void> | null = null;
 let pollTimer: number | null = null;
+let hlcTimer: number | null = null;
 let bound = false;
 let failures = 0;
 let retryAt = 0;
@@ -125,6 +129,41 @@ export async function getSyncInfo(): Promise<SyncInfo | null> {
 
 async function pendingCount(): Promise<number> {
   return (await listOutbox()).length;
+}
+
+/* ── Clock ────────────────────────────────────────────────────────────────── */
+
+/**
+ * Persists the observed high-water mark, coalescing bursts: a pull can observe
+ * hundreds of remote HLCs and only the last one matters. The "only if larger"
+ * guard means a delayed flush can never rewind what was already stored.
+ */
+function scheduleHlcPersist(config: SyncConfig, hlc: string): void {
+  if (compareHlc(hlc, config.lastHlc) <= 0) return;
+  config.lastHlc = hlc;
+  if (hlcTimer !== null) return;
+  hlcTimer = window.setTimeout(() => {
+    hlcTimer = null;
+    const active = runtime;
+    if (active?.config !== config) return;
+    void runExclusive(() => writeSyncState('app', config));
+  }, HLC_PERSIST_MS);
+}
+
+function createClock(config: SyncConfig): HlcClock {
+  return new HlcClock(config.clientId, config.lastHlc, (hlc) =>
+    scheduleHlcPersist(config, hlc),
+  );
+}
+
+/** Writes any pending clock advance immediately, for page teardown. */
+function flushHlc(): void {
+  if (hlcTimer !== null) {
+    window.clearTimeout(hlcTimer);
+    hlcTimer = null;
+  }
+  if (!runtime) return;
+  void writeSyncState('app', runtime.config);
 }
 
 /* ── HTTP ─────────────────────────────────────────────────────────────────── */
@@ -243,7 +282,7 @@ export async function connectSync(
   };
 
   await writeSyncState('app', config);
-  runtime = { config, clock: new HlcClock(config.clientId, null) };
+  runtime = { config, clock: createClock(config) };
   configureRecorder(config, runtime.clock);
   publish({ configured: true, state: 'syncing', pending: 0, lastSyncAt: 0, error: null });
 
@@ -278,6 +317,10 @@ export async function connectSync(
 
 export async function disconnectSync(): Promise<void> {
   stopLoop();
+  if (hlcTimer !== null) {
+    window.clearTimeout(hlcTimer);
+    hlcTimer = null;
+  }
   configureRecorder(null, null);
   runtime = null;
   syncPromise = null;
@@ -342,6 +385,7 @@ function bindEvents(): void {
   bound = true;
   window.addEventListener('online', wake);
   window.addEventListener('focus', wake);
+  window.addEventListener('pagehide', flushHlc);
   document.addEventListener('visibilitychange', wake);
 }
 
@@ -350,6 +394,7 @@ function unbindEvents(): void {
   bound = false;
   window.removeEventListener('online', wake);
   window.removeEventListener('focus', wake);
+  window.removeEventListener('pagehide', flushHlc);
   document.removeEventListener('visibilitychange', wake);
 }
 
@@ -378,7 +423,7 @@ export async function loadSyncRuntime(): Promise<void> {
     return;
   }
 
-  runtime = { config, clock: new HlcClock(config.clientId, config.lastHlc) };
+  runtime = { config, clock: createClock(config) };
   configureRecorder(config, runtime.clock);
   publish({
     configured: true,
