@@ -19,9 +19,16 @@ interface TransactionDetailProps {
   transaction: Transaction | null;
   defaultAccountId?: string;
   onClose: () => void;
+  /** Render as the desktop side panel instead of a modal. */
+  inline?: boolean;
 }
 
-export function TransactionDetail({ transaction, defaultAccountId, onClose }: TransactionDetailProps) {
+export function TransactionDetail({
+  transaction,
+  defaultAccountId,
+  onClose,
+  inline,
+}: TransactionDetailProps) {
   const {
     accounts,
     categories,
@@ -266,6 +273,7 @@ export function TransactionDetail({ transaction, defaultAccountId, onClose }: Tr
     <Dialog
       title={transaction ? 'Edit transaction' : 'New transaction'}
       onClose={onClose}
+      inline={inline}
       footer={
         <>
           <button type="button" className="button" onClick={onClose}>

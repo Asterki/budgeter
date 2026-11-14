@@ -9,7 +9,7 @@ import {
 } from 'react-icons/fi';
 
 import { AccountDialog } from './components/AccountDialog';
-import { AppShell } from './components/AppShell';
+import { AppShell, useIsMobile } from './components/AppShell';
 import { Rewards } from './components/Rewards';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -51,6 +51,7 @@ const SHORTCUTS: NavItem[] = [
 
 export function App() {
   const { ready, transactions, settings } = useBudget();
+  const isMobile = useIsMobile();
   const [selection, setSelection] = useState<NavSelection>(INITIAL_SELECTION);
   const [detail, setDetail] = useState<{ transactionId: string | null } | null>(null);
   const [accountDialog, setAccountDialog] = useState<Account | null | undefined>(undefined);
@@ -126,6 +127,7 @@ export function App() {
     : undefined;
   const defaultAccountId =
     selection.scope.kind === 'account' ? selection.scope.accountId : undefined;
+  const detailOpen = !!detail && (detail.transactionId === null || !!activeTransaction);
 
   function selectScope(scope: TransactionScope) {
     setSelection((prev) => ({ ...prev, view: 'transactions', scope }));
@@ -155,6 +157,16 @@ export function App() {
           onAddAccount={() => setAccountDialog(null)}
           onEditAccount={(account) => setAccountDialog(account)}
         />
+      }
+      panel={
+        !isMobile && detailOpen ? (
+          <TransactionDetail
+            transaction={activeTransaction ?? null}
+            defaultAccountId={defaultAccountId}
+            onClose={() => setDetail(null)}
+            inline
+          />
+        ) : undefined
       }
       tabbar={
         <nav className="tabbar" aria-label="Primary">
@@ -226,7 +238,7 @@ export function App() {
         />
       )}
 
-      {detail && (detail.transactionId === null || activeTransaction) && (
+      {isMobile && detailOpen && (
         <TransactionDetail
           transaction={activeTransaction ?? null}
           defaultAccountId={defaultAccountId}

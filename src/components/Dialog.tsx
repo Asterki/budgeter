@@ -9,16 +9,22 @@
 import { useEffect, useId, type ReactNode } from 'react';
 import { FiX } from 'react-icons/fi';
 
+import { useIsMobile } from './AppShell';
+import { BottomSheet } from './BottomSheet';
+
 interface DialogProps {
   title: string;
   description?: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** Render in place, as a side panel, instead of as a modal. */
+  inline?: boolean;
 }
 
-export function Dialog({ title, description, onClose, children, footer }: DialogProps) {
+export function Dialog({ title, description, onClose, children, footer, inline }: DialogProps) {
   const titleId = useId();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -27,6 +33,38 @@ export function Dialog({ title, description, onClose, children, footer }: Dialog
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
+
+  const body = (
+    <>
+      {description && <p className="dialog__description">{description}</p>}
+      {children}
+    </>
+  );
+
+  if (inline) {
+    return (
+      <section className="panel" role="region" aria-labelledby={titleId}>
+        <header className="panel__header">
+          <span className="modal__title" id={titleId}>
+            {title}
+          </span>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close panel">
+            <FiX aria-hidden="true" />
+          </button>
+        </header>
+        <div className="panel__body dialog__body">{body}</div>
+        {footer && <footer className="dialog__footer">{footer}</footer>}
+      </section>
+    );
+  }
+
+  if (isMobile) {
+    return (
+      <BottomSheet open title={title} onClose={onClose} footer={footer}>
+        {body}
+      </BottomSheet>
+    );
+  }
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -45,10 +83,7 @@ export function Dialog({ title, description, onClose, children, footer }: Dialog
             <FiX aria-hidden="true" />
           </button>
         </header>
-        <div className="modal__body dialog__body">
-          {description && <p className="dialog__description">{description}</p>}
-          {children}
-        </div>
+        <div className="modal__body dialog__body">{body}</div>
         {footer && <footer className="dialog__footer">{footer}</footer>}
       </div>
     </div>
