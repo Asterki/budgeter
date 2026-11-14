@@ -2,7 +2,7 @@
 
 import { FiChevronRight, FiSettings } from 'react-icons/fi';
 
-import { PLANNING_GROUP, type ViewKey } from '../state/navigation';
+import { MORE_VIEWS, type ViewKey } from '../state/navigation';
 
 interface MoreViewProps {
   active: ViewKey;
@@ -20,7 +20,7 @@ export function MoreView({ active, onSelect }: MoreViewProps) {
       </header>
 
       <div className="more-list">
-        {PLANNING_GROUP.map((item) => {
+        {MORE_VIEWS.map((item) => {
           const Icon = item.icon;
           return (
             <button

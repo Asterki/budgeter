@@ -489,6 +489,10 @@ kbd {
 /* ── Ledger ──────────────────────────────────────────────────────────────── */
 
 .ledger {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
   max-width: 1280px;
   margin: 0 auto;
 }
@@ -498,7 +502,6 @@ kbd {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-bottom: var(--space-md);
 }
 
 .ledger__title {
@@ -942,7 +945,7 @@ kbd {
 }
 
 .settings__head {
-  margin-bottom: var(--space-sm);
+  margin-bottom: 0;
 }
 
 .settings__title {
@@ -1254,6 +1257,10 @@ kbd {
 /* ── Accounts overview ───────────────────────────────────────────────────── */
 
 .accounts-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
   max-width: 1280px;
   margin: 0 auto;
 }
@@ -1263,14 +1270,12 @@ kbd {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-bottom: var(--space-md);
 }
 
 .accounts-view__worth {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-bottom: var(--space-md);
   padding: var(--space-md);
 }
 
@@ -1562,17 +1567,24 @@ kbd {
   }
 
   .filter-bar__row {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 2px;
+    flex-wrap: wrap;
   }
 
   .search-field {
-    flex: 0 0 220px;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .filter-field {
+    flex: 1 1 140px;
   }
 
   .filter-field .input {
-    min-width: 108px;
+    min-width: 0;
+  }
+
+  .filter-bar__clear {
+    flex: 1 1 100%;
   }
 
   .tx-row {
@@ -2208,7 +2220,7 @@ kbd {
 .forecast {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: var(--space-md);
   max-width: 1280px;
   width: 100%;
   margin: 0 auto;
@@ -2223,7 +2235,6 @@ kbd {
   justify-content: space-between;
   gap: var(--space-md);
 }
-
 .calendar__title,
 .reports__title,
 .forecast__title {
@@ -3684,16 +3695,6 @@ kbd {
 }
 
 /* ── Shared view header ──────────────────────────────────────────────────── */
-
-.ledger__head,
-.accounts-view__head,
-.budget__head,
-.calendar__head,
-.forecast__head,
-.reports__head,
-.settings__head {
-  align-items: flex-end;
-}
 
 .ledger__title,
 .budget__title,

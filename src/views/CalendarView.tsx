@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react';
 import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 
-import { QuickAdd } from '../components/QuickAdd';
 import { TransactionRow } from '../components/TransactionRow';
 import { useBudget } from '../state/store';
 import {
@@ -235,8 +234,6 @@ export function CalendarView({ onOpenTransaction }: CalendarViewProps) {
             {formatMoney(selectedNet, settings.currency, settings.locale)}
           </span>
         </header>
-
-        <QuickAdd defaultDate={selected} />
 
         {selectedRows.length === 0 && selectedPlanned.length === 0 ? (
           <p className="calendar__empty">No transactions on this day.</p>

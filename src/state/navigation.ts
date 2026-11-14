@@ -65,5 +65,5 @@ export const PLANNING_GROUP: NavItem[] = [
   { view: 'calendar', label: 'Calendar', icon: FiCalendar },
 ];
 
-/** The mobile More list is the rail's Planning group, in the same order. */
-export const MORE_VIEWS = PLANNING_GROUP;
+/** The mobile More list is the rail's Planning group, minus what already has a tab. */
+export const MORE_VIEWS = PLANNING_GROUP.filter((item) => item.view !== 'budget');
