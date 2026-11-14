@@ -204,13 +204,6 @@ export const pushChanges = db.transaction(
   },
 );
 
-export function currentHead(userId: string): number {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM changes WHERE user_id = ?')
-    .get(userId) as { seq: number };
-  return row.seq;
-}
-
 export function pullChanges(
   userId: string,
   since: number,
@@ -231,7 +224,7 @@ export function pullChanges(
 
 export function snapshot(
   userId: string,
-  head: number | undefined,
+  head: number,
   after: { type: string; id: string } | null,
   limit: number,
 ): {
@@ -239,9 +232,6 @@ export function snapshot(
   next: { type: string; id: string } | null;
   head: number;
 } {
-  // A supplied head pins every page of one pagination to the same snapshot
-  // boundary; otherwise fall back to the current head, exactly as before.
-  const resolvedHead = head ?? currentHead(userId);
   const rows = (
     after
       ? db
@@ -253,7 +243,7 @@ export function snapshot(
              ORDER BY entity_type ASC, entity_id ASC
              LIMIT ?`,
           )
-          .all(userId, resolvedHead, after.type, after.type, after.id, limit + 1)
+          .all(userId, head, after.type, after.type, after.id, limit + 1)
       : db
           .prepare(
             `SELECT entity_type, entity_id, hlc, deleted, payload
@@ -262,7 +252,7 @@ export function snapshot(
              ORDER BY entity_type ASC, entity_id ASC
              LIMIT ?`,
           )
-          .all(userId, resolvedHead, limit + 1)
+          .all(userId, head, limit + 1)
   ) as StoredEntity[];
 
   const hasMore = rows.length > limit;
@@ -272,7 +262,7 @@ export function snapshot(
   return {
     entities: page,
     next: hasMore && last ? { type: last.entity_type, id: last.entity_id } : null,
-    head: resolvedHead,
+    head,
   };
 }
 

@@ -321,7 +321,7 @@ app.get("/v1/sync/snapshot", authenticate, (req, res) => {
       ? Number(rawHead)
       : undefined;
 
-  const page = snapshot(user.key_hash, head, after, limit);
+  const page = snapshot(user.key_hash, head ?? user.head_seq, after, limit);
   res.json({
     entities: page.entities.map((entity) => ({
       entityType: entity.entity_type,
