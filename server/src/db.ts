@@ -141,17 +141,26 @@ const upsertEntity = db.prepare(`
   WHERE excluded.hlc > entities.hlc
 `);
 
+const selectEntity = db.prepare(
+  'SELECT hlc FROM entities WHERE user_id = ? AND entity_type = ? AND entity_id = ?',
+);
+
 const bumpHead = db.prepare('UPDATE users SET head_seq = MAX(head_seq, ?) WHERE key_hash = ?');
 
 export interface PushResult {
   accepted: string[];
-  cursor: number;
+  verdicts: Array<{ changeId: string; applied: boolean }>;
 }
 
-/** Appends a batch atomically. Duplicate change ids are ignored. */
+/**
+ * Appends a batch atomically and reports, for every input change, whether it
+ * actually became the stored entity. Duplicate change ids are ignored for the
+ * change log but still produce a verdict.
+ */
 export const pushChanges = db.transaction(
   (userId: string, changes: ChangeInput[]): PushResult => {
     const accepted: string[] = [];
+    const verdicts: Array<{ changeId: string; applied: boolean }> = [];
     let cursor = 0;
 
     for (const change of changes) {
@@ -167,23 +176,31 @@ export const pushChanges = db.transaction(
         Date.now(),
       ) as { seq: number } | undefined;
 
-      if (!row) continue;
+      if (row) {
+        accepted.push(change.changeId);
+        cursor = row.seq;
+        upsertEntity.run(
+          userId,
+          change.entityType,
+          change.entityId,
+          change.hlc,
+          change.deleted ? 1 : 0,
+          change.payload,
+          row.seq,
+        );
+      }
 
-      accepted.push(change.changeId);
-      cursor = row.seq;
-      upsertEntity.run(
-        userId,
-        change.entityType,
-        change.entityId,
-        change.hlc,
-        change.deleted ? 1 : 0,
-        change.payload,
-        row.seq,
-      );
+      const entity = selectEntity.get(userId, change.entityType, change.entityId) as
+        | { hlc: string }
+        | undefined;
+      verdicts.push({
+        changeId: change.changeId,
+        applied: entity?.hlc === change.hlc,
+      });
     }
 
     if (cursor > 0) bumpHead.run(cursor, userId);
-    return { accepted, cursor };
+    return { accepted, verdicts };
   },
 );
 

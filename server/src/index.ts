@@ -167,13 +167,26 @@ app.post("/v1/sync/push", authenticate, (req, res) => {
     return;
   }
 
+  const acks = req.headers['x-budget-sync-acks'] === '1';
+
   const changes: ChangeInput[] = [];
+  const mergedVerdicts: Array<{
+    changeId: string;
+    applied?: boolean;
+    error?: string;
+  }> = [];
+  const appliedIndexes: number[] = [];
 
   for (const raw of body.changes) {
     const item = raw as Record<string, unknown>;
     const entityType = item.entityType;
+    const changeId = typeof item.changeId === "string" ? item.changeId : "";
 
     if (typeof entityType === "string" && LEGACY_ENTITY_TYPES.has(entityType)) {
+      if (acks) {
+        mergedVerdicts.push({ changeId, error: "legacy_entity_type" });
+        continue;
+      }
       res.status(400).json({
         error: "legacy_entity_type",
         message:
@@ -199,10 +212,16 @@ app.post("/v1/sync/push", authenticate, (req, res) => {
       item.payload.length > MAX_PAYLOAD ||
       (item.deleted && item.payload !== "")
     ) {
+      if (acks) {
+        mergedVerdicts.push({ changeId, error: "invalid_change" });
+        continue;
+      }
       res.status(400).json({ error: "invalid_change" });
       return;
     }
 
+    appliedIndexes.push(mergedVerdicts.length);
+    mergedVerdicts.push({ changeId: item.changeId, applied: false });
     changes.push({
       changeId: item.changeId,
       clientId: body.clientId,
@@ -219,11 +238,17 @@ app.post("/v1/sync/push", authenticate, (req, res) => {
     .prepare("SELECT * FROM users WHERE key_hash = ?")
     .get(user.key_hash) as UserRow;
 
-  res.json({
+  for (let i = 0; i < appliedIndexes.length; i += 1) {
+    mergedVerdicts[appliedIndexes[i]].applied = result.verdicts[i].applied;
+  }
+
+  const resBody: Record<string, unknown> = {
     accepted: result.accepted,
     duplicates: changes.length - result.accepted.length,
     cursor: fresh.head_seq,
-  });
+  };
+  if (acks) resBody.changes = mergedVerdicts;
+  res.json(resBody);
 });
 
 app.get("/v1/sync/changes", authenticate, (req, res) => {
