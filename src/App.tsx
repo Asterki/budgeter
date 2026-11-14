@@ -10,7 +10,6 @@ import {
 
 import { AccountDialog } from './components/AccountDialog';
 import { AppShell } from './components/AppShell';
-import { Dialog } from './components/Dialog';
 import { Rewards } from './components/Rewards';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -19,7 +18,6 @@ import { monthRange } from './domain/budget';
 import { useBudget } from './state/store';
 import {
   INITIAL_SELECTION,
-  MORE_VIEWS,
   PLANNING_GROUP,
   VIEW_GROUP,
   type NavItem,
@@ -31,6 +29,7 @@ import { AccountsView } from './views/AccountsView';
 import { BudgetView } from './views/BudgetView';
 import { CalendarView } from './views/CalendarView';
 import { ForecastView } from './views/ForecastView';
+import { MoreView } from './views/MoreView';
 import { ReportsView } from './views/ReportsView';
 import { SettingsView } from './views/SettingsView';
 import { TransactionsView } from './views/TransactionsView';
@@ -40,6 +39,7 @@ const MOBILE_TABS: { view: ViewKey; label: string; icon: typeof FiList }[] = [
   { view: 'transactions', label: 'Transactions', icon: FiList },
   { view: 'accounts', label: 'Accounts', icon: FiCreditCard },
   { view: 'budget', label: 'Budget', icon: FiPieChart },
+  { view: 'more', label: 'More', icon: FiMoreHorizontal },
 ];
 
 /** 1–7 follow the rail, not a separate list. */
@@ -56,7 +56,6 @@ export function App() {
   const [accountDialog, setAccountDialog] = useState<Account | null | undefined>(undefined);
   const [searchSignal, setSearchSignal] = useState(0);
   const [composeSignal, setComposeSignal] = useState(0);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [budgetJump, setBudgetJump] = useState<{
     categoryId: string;
     from: string;
@@ -161,11 +160,18 @@ export function App() {
         <nav className="tabbar" aria-label="Primary">
           {MOBILE_TABS.map((tab) => {
             const Icon = tab.icon;
+            const active =
+              tab.view === 'more'
+                ? selection.view === 'more' ||
+                  selection.view === 'settings' ||
+                  PLANNING_GROUP.some((item) => item.view === selection.view)
+                : selection.view === tab.view;
             return (
               <button
                 key={tab.view}
                 type="button"
-                className={`tabbar__item${selection.view === tab.view ? ' tabbar__item--active' : ''}`}
+                className={`tabbar__item${active ? ' tabbar__item--active' : ''}`}
+                aria-current={active ? 'page' : undefined}
                 onClick={() => setSelection((prev) => ({ ...prev, view: tab.view }))}
               >
                 <Icon aria-hidden="true" />
@@ -173,18 +179,17 @@ export function App() {
               </button>
             );
           })}
-          <button
-            type="button"
-            className={`tabbar__item${
-              MORE_VIEWS.some((tab) => tab.view === selection.view) ? ' tabbar__item--active' : ''
-            }`}
-            onClick={() => setMoreOpen(true)}
-            aria-expanded={moreOpen}
-          >
-            <FiMoreHorizontal aria-hidden="true" />
-            <span>More</span>
-          </button>
         </nav>
+      }
+      fab={
+        <button
+          type="button"
+          className="fab"
+          onClick={() => setDetail({ transactionId: null })}
+          aria-label="Add transaction"
+        >
+          <FiPlus aria-hidden="true" />
+        </button>
       }
     >
       {selection.view === 'transactions' && (
@@ -214,42 +219,11 @@ export function App() {
       {selection.view === 'reports' && <ReportsView />}
       {selection.view === 'forecast' && <ForecastView />}
       {selection.view === 'settings' && <SettingsView />}
-
-      {moreOpen && (
-        <Dialog title="More" onClose={() => setMoreOpen(false)}>
-          <div className="more-list">
-            <button
-              type="button"
-              className="more-list__item"
-              onClick={() => {
-                setMoreOpen(false);
-                setDetail({ transactionId: null });
-              }}
-            >
-              <FiPlus aria-hidden="true" />
-              <span>Add transaction</span>
-            </button>
-            {MORE_VIEWS.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.view}
-                  type="button"
-                  className={`more-list__item${
-                    selection.view === tab.view ? ' more-list__item--active' : ''
-                  }`}
-                  onClick={() => {
-                    setMoreOpen(false);
-                    setSelection((prev) => ({ ...prev, view: tab.view }));
-                  }}
-                >
-                  <Icon aria-hidden="true" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </Dialog>
+      {selection.view === 'more' && (
+        <MoreView
+          active={selection.view}
+          onSelect={(view) => setSelection((prev) => ({ ...prev, view }))}
+        />
       )}
 
       {detail && (detail.transactionId === null || activeTransaction) && (
