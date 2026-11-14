@@ -19,6 +19,7 @@ import type {
   Transaction,
 } from '../domain/types';
 import { DEFAULT_SETTINGS } from '../domain/types';
+import { compareHlc } from '../sync/hlc';
 
 const DB_NAME = 'budget';
 /** v5 introduced the budgeting schema; v6 added categorization rules. */
@@ -147,54 +148,219 @@ async function readAll<T>(store: StoreName): Promise<T[]> {
   return request(tx.objectStore(store).getAll() as IDBRequest<T[]>);
 }
 
-/* ── Mutation notifications ───────────────────────────────────────────────── */
+/* ── Write lock and sync writer ───────────────────────────────────────────── */
 
-export interface MutationEvent {
-  store: StoreName;
-  puts: unknown[];
-  deletes: string[];
+/** Reverse of `entityStore`: maps each domain store to its sync entity kind. */
+const KIND_BY_STORE: Record<StoreName, EntityKind> = {
+  accounts: 'account',
+  categories: 'category',
+  categoryGroups: 'categoryGroup',
+  payees: 'payee',
+  transactions: 'transaction',
+  budgets: 'budget',
+  recurring: 'recurring',
+  rules: 'rule',
+  settings: 'settings',
+};
+
+/**
+ * Every domain write — local mutation or incoming remote change — funnels
+ * through this promise chain so an entity, its version and its outbox row are
+ * committed as one serialised unit. It cannot deadlock: `getVersion`,
+ * `putVersion`, `putOutbox` and the silent remote writers never re-enter it.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+export function runExclusive<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task, task);
+  queue = run.catch(() => undefined);
+  return run;
 }
 
-let mutationListener: ((event: MutationEvent) => void) | null = null;
-
-/** Registered by the sync recorder; every domain write is mirrored to the outbox. */
-export function setMutationListener(listener: ((event: MutationEvent) => void) | null): void {
-  mutationListener = listener;
+/**
+ * Optional hook installed by the sync recorder. When set, every domain write is
+ * version-gated and mirrored into the outbox inside the same exclusive slot.
+ * When null, writes behave exactly as the plain pre-sync code: entity only, no
+ * version and no outbox.
+ */
+export interface SyncWriter {
+  nextHlc(): string;
+  toChange(
+    kind: EntityKind,
+    id: string,
+    value: unknown | null,
+  ): {
+    changeId: string;
+    entityType: EntityKind;
+    entityId: string;
+    hlc: string;
+    deleted: boolean;
+    payload: unknown;
+  };
+  commitLastHlc(hlc: string): Promise<void>;
+  onLocalWrite?(): void;
 }
 
-function emitMutation(event: MutationEvent): void {
-  if (!mutationListener) return;
-  try {
-    mutationListener(event);
-  } catch (error) {
-    console.error('Mutation listener failed', error);
-  }
+let syncWriter: SyncWriter | null = null;
+
+export function setSyncWriter(writer: SyncWriter | null): void {
+  syncWriter = writer;
 }
 
-async function putValue<T>(store: StoreName, value: T, key?: IDBValidKey): Promise<void> {
+/** Entity id for a store value: settings use a fixed key, everything else its id. */
+function entityIdFor(kind: EntityKind, value: unknown, key?: IDBValidKey): string {
+  if (kind === 'settings') return SETTINGS_KEY;
+  const id = (value as { id?: unknown } | null)?.id;
+  if (id != null) return String(id);
+  return key != null ? String(key) : '';
+}
+
+async function writeEntity(store: StoreName, value: unknown, key?: IDBValidKey): Promise<void> {
   const db = await openDatabase();
   const tx = db.transaction(store, 'readwrite');
-  tx.objectStore(store).put(value as unknown as object, key);
+  tx.objectStore(store).put(value as object, key);
   await transactionDone(tx);
-  emitMutation({ store, puts: [value], deletes: [] });
 }
 
-async function putValues<T>(store: StoreName, values: T[]): Promise<void> {
-  if (values.length === 0) return;
+async function writeEntities(store: StoreName, values: unknown[]): Promise<void> {
   const db = await openDatabase();
   const tx = db.transaction(store, 'readwrite');
   const target = tx.objectStore(store);
-  for (const value of values) target.put(value as unknown as object);
+  for (const value of values) target.put(value as object);
   await transactionDone(tx);
-  emitMutation({ store, puts: values, deletes: [] });
 }
 
-async function deleteValue(store: StoreName, key: IDBValidKey): Promise<void> {
+async function deleteEntity(store: StoreName, key: IDBValidKey): Promise<void> {
   const db = await openDatabase();
   const tx = db.transaction(store, 'readwrite');
   tx.objectStore(store).delete(key);
   await transactionDone(tx);
-  emitMutation({ store, puts: [], deletes: [String(key)] });
+}
+
+async function putValue<T>(store: StoreName, value: T, key?: IDBValidKey): Promise<{ written: string[] }> {
+  return runExclusive(async () => {
+    const kind = KIND_BY_STORE[store];
+    const id = entityIdFor(kind, value, key);
+    const writer = syncWriter;
+
+    if (!writer) {
+      await writeEntity(store, value, key);
+      return { written: [id] };
+    }
+
+    const hlc = writer.nextHlc();
+    const stored = await getVersion(kind, id);
+    if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
+
+    await writeEntity(store, value, key);
+    await putVersion({ entityType: kind, entityId: id, hlc, deleted: false });
+    await clearOutboxForEntity(kind, id);
+    await putOutbox(writer.toChange(kind, id, value));
+    await writer.commitLastHlc(hlc);
+    writer.onLocalWrite?.();
+    return { written: [id] };
+  });
+}
+
+async function putValues<T>(store: StoreName, values: T[]): Promise<{ written: string[] }> {
+  if (values.length === 0) return { written: [] };
+  return runExclusive(async () => {
+    const kind = KIND_BY_STORE[store];
+    const writer = syncWriter;
+
+    if (!writer) {
+      await writeEntities(store, values as unknown[]);
+      return { written: values.map((value) => entityIdFor(kind, value)) };
+    }
+
+    const hlc = writer.nextHlc();
+    const accepted: Array<{ id: string; value: T }> = [];
+    for (const value of values) {
+      const id = entityIdFor(kind, value);
+      const stored = await getVersion(kind, id);
+      if (stored && compareHlc(hlc, stored.hlc) <= 0) continue;
+      accepted.push({ id, value });
+    }
+
+    if (accepted.length === 0) return { written: [] };
+
+    await writeEntities(store, accepted.map((entry) => entry.value) as unknown[]);
+    for (const entry of accepted) {
+      await putVersion({ entityType: kind, entityId: entry.id, hlc, deleted: false });
+      await clearOutboxForEntity(kind, entry.id);
+      await putOutbox(writer.toChange(kind, entry.id, entry.value));
+    }
+    await writer.commitLastHlc(hlc);
+    writer.onLocalWrite?.();
+    return { written: accepted.map((entry) => entry.id) };
+  });
+}
+
+async function deleteValue(store: StoreName, key: IDBValidKey): Promise<{ written: string[] }> {
+  return runExclusive(async () => {
+    const kind = KIND_BY_STORE[store];
+    const id = kind === 'settings' ? SETTINGS_KEY : String(key);
+    const writer = syncWriter;
+
+    if (!writer) {
+      await deleteEntity(store, key);
+      return { written: [id] };
+    }
+
+    const hlc = writer.nextHlc();
+    const stored = await getVersion(kind, id);
+    if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
+
+    await deleteEntity(store, key);
+    await putVersion({ entityType: kind, entityId: id, hlc, deleted: true });
+    await clearOutboxForEntity(kind, id);
+    await putOutbox(writer.toChange(kind, id, null));
+    await writer.commitLastHlc(hlc);
+    writer.onLocalWrite?.();
+    return { written: [id] };
+  });
+}
+
+async function removeMany(store: StoreName, ids: string[]): Promise<{ written: string[] }> {
+  if (ids.length === 0) return { written: [] };
+  return runExclusive(async () => {
+    const kind = KIND_BY_STORE[store];
+    const writer = syncWriter;
+
+    if (!writer) {
+      const db = await openDatabase();
+      const tx = db.transaction(store, 'readwrite');
+      const target = tx.objectStore(store);
+      for (const id of ids) target.delete(id);
+      await transactionDone(tx);
+      return { written: [...ids] };
+    }
+
+    const hlc = writer.nextHlc();
+    const accepted: string[] = [];
+    for (const id of ids) {
+      const stored = await getVersion(kind, id);
+      if (stored && compareHlc(hlc, stored.hlc) <= 0) continue;
+      accepted.push(id);
+    }
+
+    if (accepted.length === 0) return { written: [] };
+
+    const db = await openDatabase();
+    const tx = db.transaction(store, 'readwrite');
+    const target = tx.objectStore(store);
+    for (const id of accepted) target.delete(id);
+    await transactionDone(tx);
+
+    for (const id of accepted) {
+      await putVersion({ entityType: kind, entityId: id, hlc, deleted: true });
+      await clearOutboxForEntity(kind, id);
+      await putOutbox(writer.toChange(kind, id, null));
+    }
+    await writer.commitLastHlc(hlc);
+    writer.onLocalWrite?.();
+    return { written: accepted };
+  });
 }
 
 async function clearStore(store: StoreName): Promise<void> {
@@ -474,25 +640,9 @@ export const db = {
      * Writes both halves of a transfer in one IndexedDB transaction so a crash
      * can never leave an unbalanced pair behind.
      */
-    async putTransferPair(from: Transaction, to: Transaction): Promise<void> {
-      const database = await openDatabase();
-      const tx = database.transaction(STORE.transactions, 'readwrite');
-      const store = tx.objectStore(STORE.transactions);
-      store.put(from);
-      store.put(to);
-      await transactionDone(tx);
-      emitMutation({ store: STORE.transactions, puts: [from, to], deletes: [] });
-    },
+    putTransferPair: (from: Transaction, to: Transaction) => putValues(STORE.transactions, [from, to]),
     remove: (id: string) => deleteValue(STORE.transactions, id),
-    removeMany: async (ids: string[]) => {
-      if (ids.length === 0) return;
-      const database = await openDatabase();
-      const tx = database.transaction(STORE.transactions, 'readwrite');
-      const store = tx.objectStore(STORE.transactions);
-      for (const id of ids) store.delete(id);
-      await transactionDone(tx);
-      emitMutation({ store: STORE.transactions, puts: [], deletes: ids });
-    },
+    removeMany: (ids: string[]) => removeMany(STORE.transactions, ids),
     clear: () => clearStore(STORE.transactions),
   },
   budgets: {
@@ -500,15 +650,7 @@ export const db = {
     put: (budget: Budget) => putValue(STORE.budgets, budget),
     putMany: (budgets: Budget[]) => putValues(STORE.budgets, budgets),
     remove: (id: string) => deleteValue(STORE.budgets, id),
-    removeMany: async (ids: string[]) => {
-      if (ids.length === 0) return;
-      const database = await openDatabase();
-      const tx = database.transaction(STORE.budgets, 'readwrite');
-      const store = tx.objectStore(STORE.budgets);
-      for (const id of ids) store.delete(id);
-      await transactionDone(tx);
-      emitMutation({ store: STORE.budgets, puts: [], deletes: ids });
-    },
+    removeMany: (ids: string[]) => removeMany(STORE.budgets, ids),
     clear: () => clearStore(STORE.budgets),
   },
   recurring: {
