@@ -2063,10 +2063,6 @@ kbd {
 }
 
 @media (max-width: 860px) {
-  .budget {
-    padding: var(--space-md);
-  }
-
   .budget__cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2843,7 +2839,6 @@ kbd {
   .calendar,
   .reports,
   .forecast {
-    padding: var(--space-md);
     gap: var(--space-md);
   }
 

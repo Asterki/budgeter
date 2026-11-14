@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import {
   FiChevronRight,
+  FiCreditCard,
   FiPlus,
   FiSearch,
   FiSettings,
@@ -143,6 +144,16 @@ export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: Si
               <FiPlus />
             </button>
           </p>
+          <button
+            type="button"
+            className={`rail__item${
+              selection.view === 'accounts' ? ' rail__item--active' : ''
+            }`}
+            onClick={() => onSelect({ view: 'accounts', scope: selection.scope })}
+          >
+            <FiCreditCard aria-hidden="true" />
+            <span>Overview</span>
+          </button>
           {activeAccounts.map((account) => (
             <div key={account.id} className="rail__account">
               <button
