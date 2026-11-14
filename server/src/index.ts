@@ -36,6 +36,7 @@ const SYNC_PROTOCOL_VERSION = 2;
 const SYNC_SCHEMA_VERSION = 6;
 const PROTOCOL_HEADER = "X-Budget-Sync-Protocol";
 const SCHEMA_HEADER = "X-Budget-Sync-Schema";
+const ACKS_HEADER = "X-Budget-Sync-Acks";
 const LEGACY_ENTITY_TYPES = new Set(["task", "project", "place"]);
 
 const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
@@ -58,7 +59,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("Vary", "Origin");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      `Authorization, Content-Type, ${PROTOCOL_HEADER}, ${SCHEMA_HEADER}`,
+      `Authorization, Content-Type, ${PROTOCOL_HEADER}, ${SCHEMA_HEADER}, ${ACKS_HEADER}`,
     );
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.setHeader("Access-Control-Max-Age", "86400");
@@ -117,6 +118,15 @@ app.get("/health", (_req, res) => {
     protocol: SYNC_PROTOCOL_VERSION,
     schema: SYNC_SCHEMA_VERSION,
   });
+});
+
+/**
+ * Sync responses must never be cached: a service worker or browser cache
+ * serving a stale payload would corrupt a client's view of the log.
+ */
+app.use("/v1/sync", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
 });
 
 /**
@@ -303,7 +313,15 @@ app.get("/v1/sync/snapshot", authenticate, (req, res) => {
     return;
   }
 
-  const page = snapshot(user.key_hash, user.head_seq, after, limit);
+  const rawHead = req.query.head;
+  const head =
+    typeof rawHead === "string" &&
+    rawHead !== "" &&
+    Number.isFinite(Number(rawHead))
+      ? Number(rawHead)
+      : undefined;
+
+  const page = snapshot(user.key_hash, head, after, limit);
   res.json({
     entities: page.entities.map((entity) => ({
       entityType: entity.entity_type,
@@ -313,7 +331,7 @@ app.get("/v1/sync/snapshot", authenticate, (req, res) => {
       payload: entity.payload,
     })),
     next: page.next,
-    head: user.head_seq,
+    head: page.head,
   });
 });
 
