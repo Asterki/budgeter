@@ -79,6 +79,8 @@ const POLL_MS = 10_000;
 const TIMEOUT_MS = 20_000;
 /** Observed remote clocks are flushed to disk at most this often. */
 const HLC_PERSIST_MS = 1_000;
+/** Upper bound on how long background writers wait for the first sync attempt. */
+const SETTLE_MS = 2_000;
 
 const idleStatus: SyncStatus = {
   configured: false,
@@ -104,6 +106,9 @@ let generation = 0;
 let bound = false;
 let failures = 0;
 let retryAt = 0;
+let settledPromise: Promise<void> | null = null;
+let firstAttempt: Promise<void> | null = null;
+let resolveFirstAttempt: (() => void) | null = null;
 
 const listeners = new Set<(status: SyncStatus) => void>();
 
@@ -291,6 +296,9 @@ export async function connectSync(
   configureRecorder(null, null);
   runtime = null;
   syncPromise = null;
+  settledPromise = null;
+  firstAttempt = null;
+  resolveFirstAttempt = null;
   failures = 0;
   retryAt = 0;
   await clearSyncStores();
@@ -360,6 +368,9 @@ export async function disconnectSync(): Promise<void> {
   configureRecorder(null, null);
   runtime = null;
   syncPromise = null;
+  settledPromise = null;
+  firstAttempt = null;
+  resolveFirstAttempt = null;
   failures = 0;
   retryAt = 0;
   await clearSyncStores();
@@ -554,13 +565,51 @@ export interface SyncResult {
   error: string | null;
 }
 
+function attemptSignal(): Promise<void> {
+  if (!firstAttempt) {
+    firstAttempt = new Promise<void>((resolve) => {
+      resolveFirstAttempt = resolve;
+    });
+  }
+  return firstAttempt;
+}
+
+/**
+ * Resolves once the first sync attempt of this session has finished — success
+ * or failure — or after {@link SETTLE_MS}, whichever comes first.
+ *
+ * Background writers run after this so they cannot race a pull that would have
+ * delivered the same rows, and so an offline boot still catches up within two
+ * seconds instead of waiting for a sync that will never succeed.
+ */
+export function whenInitialSyncSettles(): Promise<void> {
+  if (!runtime) return Promise.resolve();
+  if (!settledPromise) {
+    settledPromise = Promise.race([
+      attemptSignal(),
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, SETTLE_MS);
+      }),
+    ]);
+  }
+  return settledPromise;
+}
+
 export function syncNow(): Promise<SyncResult> {
   const idle: SyncResult = { applied: 0, error: null };
+  const settle = () => {
+    resolveFirstAttempt?.();
+    resolveFirstAttempt = null;
+  };
   if (!runtime) return Promise.resolve(idle);
   if (syncPromise) return syncPromise;
-  if (Date.now() < retryAt) return Promise.resolve(idle);
+  if (Date.now() < retryAt) {
+    settle();
+    return Promise.resolve(idle);
+  }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     publish({ state: 'idle', error: 'Offline — changes are queued.' });
+    settle();
     return Promise.resolve(idle);
   }
 
@@ -602,6 +651,7 @@ export function syncNow(): Promise<SyncResult> {
     .then((result) => result ?? idle)
     .finally(() => {
       syncPromise = null;
+      settle();
     });
 
   return syncPromise;

@@ -51,7 +51,13 @@ import {
   occurrenceKey,
   recurringTransactionId,
 } from '../domain/recurring';
-import { disconnectSync, getSyncInfo, loadSyncRuntime, registerApplyHandler } from '../sync/engine';
+import {
+  disconnectSync,
+  getSyncInfo,
+  loadSyncRuntime,
+  registerApplyHandler,
+  whenInitialSyncSettles,
+} from '../sync/engine';
 import { emitReward } from './rewards';
 
 export const ACCOUNT_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39c5cf'];
@@ -343,14 +349,21 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
       const snapshot = await loadSnapshot();
       if (cancelled) return;
       applySnapshot(snapshot);
-      setReady(true);
 
       registerApplyHandler(() => {
         void loadSnapshot().then((next) => {
           if (!cancelled) applySnapshot(next);
         });
       });
-      await loadSyncRuntime();
+
+      // The recorder must be configured before anything writes, and the
+      // catch-up effect below must not race the first pull, so the sync runtime
+      // loads before the app declares itself ready.
+      try {
+        await loadSyncRuntime();
+      } finally {
+        if (!cancelled) setReady(true);
+      }
     };
 
     void boot();
@@ -489,6 +502,10 @@ export function BudgetProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     const run = async () => {
+      // Background writers must not race the first pull: a pull can deliver the
+      // same occurrence, and an offline boot must still catch up, so wait for
+      // the first attempt (bounded) rather than for success.
+      await whenInitialSyncSettles();
       await catchUpRecurring();
       await evaluateClosedMonths();
     };
