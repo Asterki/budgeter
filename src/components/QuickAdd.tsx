@@ -38,6 +38,8 @@ interface QuickAddProps {
   focusSignal?: number;
   /** Day used when the line has no date token, e.g. a selected calendar day. */
   defaultDate?: string;
+  /** Focus the field once on mount, so a cold open is ready to type into. */
+  autoFocus?: boolean;
   onCreated?: () => void;
 }
 
@@ -68,6 +70,7 @@ export function QuickAdd({
   defaultAccountId,
   focusSignal = 0,
   defaultDate,
+  autoFocus = false,
   onCreated,
 }: QuickAddProps) {
   const {
@@ -91,6 +94,7 @@ export function QuickAdd({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [repeatRule, setRepeatRule] = useState<RecurrenceRule | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const autoFocused = useRef(false);
   const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
 
@@ -134,6 +138,12 @@ export function QuickAdd({
   useEffect(() => {
     if (focusSignal > 0) inputRef.current?.focus();
   }, [focusSignal]);
+
+  useEffect(() => {
+    if (!autoFocus || autoFocused.current) return;
+    autoFocused.current = true;
+    inputRef.current?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     if (!suggestionsOpen) return;

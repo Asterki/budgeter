@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FiDownload, FiPlus } from 'react-icons/fi';
 
+import { useIsMobile } from '../components/AppShell';
 import { FilterBar } from '../components/FilterBar';
 import { QuickAdd } from '../components/QuickAdd';
 import { TransactionRow } from '../components/TransactionRow';
@@ -24,6 +25,13 @@ import { formatDate, todayISO } from '../domain/date';
 import { plannedItems } from '../domain/recurring';
 import type { Transaction } from '../domain/types';
 import { syncNow } from '../sync/engine';
+
+/**
+ * True until the first ledger is shown. Only that first mount focuses the
+ * composer: switching tabs, closing details or a sync refresh must not steal
+ * the caret back from the user.
+ */
+let coldOpenPending = true;
 
 interface TransactionsViewProps {
   selection: NavSelection;
@@ -49,6 +57,9 @@ export function TransactionsView({
   const [filters, setFilters] = useState<LedgerFilters>(DEFAULT_FILTERS);
   const [rowLimit, setRowLimit] = useState(200);
   const searchRef = useRef<HTMLInputElement>(null);
+  const isMobile = useIsMobile();
+  const coldStart = useRef(isMobile && coldOpenPending);
+  if (coldStart.current) coldOpenPending = false;
 
   useEffect(() => {
     setRowLimit(200);
@@ -315,6 +326,7 @@ export function TransactionsView({
       <QuickAdd
         defaultAccountId={selection.scope.kind === 'account' ? selection.scope.accountId : undefined}
         focusSignal={composeSignal}
+        autoFocus={coldStart.current}
       />
 
       <FilterBar
