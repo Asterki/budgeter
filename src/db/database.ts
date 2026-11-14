@@ -198,7 +198,14 @@ export interface SyncWriter {
     payload: unknown;
   };
   commitLastHlc(hlc: string): Promise<void>;
+  /** Called after a local change was queued for the relay. */
   onLocalWrite?(): void;
+  /**
+   * Called when a local write was gated out because a newer version already
+   * exists — the caller's intent lost, and the UI must re-read rather than keep
+   * displaying what it tried to save.
+   */
+  onWriteSkipped?(id?: string): void;
 }
 
 let syncWriter: SyncWriter | null = null;
@@ -250,7 +257,13 @@ async function putValue<T>(store: StoreName, value: T, key?: IDBValidKey): Promi
 
     const hlc = writer.nextHlc();
     const stored = await getVersion(kind, id);
-    if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
+    if (stored && compareHlc(hlc, stored.hlc) <= 0) {
+      // The stored row is newer than anything this device could mint, which
+      // means a pull already owns this entity. Tell the caller so the UI can
+      // re-read instead of showing the value it just tried to save.
+      writer.onWriteSkipped?.(id);
+      return { written: [] };
+    }
 
     await writeEntity(store, value, key);
     await putVersion({ entityType: kind, entityId: id, hlc, deleted: false, queued: true });
@@ -282,7 +295,10 @@ async function putValues<T>(store: StoreName, values: T[]): Promise<{ written: s
       accepted.push({ id, value });
     }
 
-    if (accepted.length === 0) return { written: [] };
+    if (accepted.length === 0) {
+      writer.onWriteSkipped?.();
+      return { written: [] };
+    }
 
     await writeEntities(store, accepted.map((entry) => entry.value) as unknown[]);
     for (const entry of accepted) {
@@ -309,7 +325,13 @@ async function deleteValue(store: StoreName, key: IDBValidKey): Promise<{ writte
 
     const hlc = writer.nextHlc();
     const stored = await getVersion(kind, id);
-    if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
+    if (stored && compareHlc(hlc, stored.hlc) <= 0) {
+      // The stored row is newer than anything this device could mint, which
+      // means a pull already owns this entity. Tell the caller so the UI can
+      // re-read instead of showing the value it just tried to save.
+      writer.onWriteSkipped?.(id);
+      return { written: [] };
+    }
 
     await deleteEntity(store, key);
     await putVersion({ entityType: kind, entityId: id, hlc, deleted: true, queued: true });
@@ -344,7 +366,10 @@ async function removeMany(store: StoreName, ids: string[]): Promise<{ written: s
       accepted.push(id);
     }
 
-    if (accepted.length === 0) return { written: [] };
+    if (accepted.length === 0) {
+      writer.onWriteSkipped?.();
+      return { written: [] };
+    }
 
     const db = await openDatabase();
     const tx = db.transaction(store, 'readwrite');

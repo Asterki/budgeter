@@ -17,7 +17,7 @@ export interface SyncConfig {
   lastHlc: string;
 }
 
-export type SyncState = 'off' | 'idle' | 'syncing' | 'error';
+export type SyncState = 'off' | 'idle' | 'syncing' | 'error' | 'degraded' | 'offline';
 
 export interface SyncStatus {
   configured: boolean;
@@ -25,6 +25,11 @@ export interface SyncStatus {
   pending: number;
   lastSyncAt: number;
   error: string | null;
+  /** Changes the relay refused outright; kept locally, never silently dropped. */
+  quarantined: number;
+  /** Rows a pull could not apply because a local version was newer. */
+  skipped: number;
+  fingerprint: string;
 }
 
 export interface SyncInfo {

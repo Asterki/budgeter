@@ -23,6 +23,7 @@ import { transactionsToCsv, type CsvExportRow } from '../domain/csv';
 import { formatDate, todayISO } from '../domain/date';
 import { plannedItems } from '../domain/recurring';
 import type { Transaction } from '../domain/types';
+import { syncNow } from '../sync/engine';
 
 interface TransactionsViewProps {
   selection: NavSelection;
@@ -52,6 +53,12 @@ export function TransactionsView({
   useEffect(() => {
     setRowLimit(200);
   }, [filters, selection.scope]);
+
+  // Landing here is the first thing either device does, so it is also the most
+  // likely moment for the other device's changes to be waiting.
+  useEffect(() => {
+    void syncNow();
+  }, []);
 
   useEffect(() => {
     if (searchSignal > 0) {

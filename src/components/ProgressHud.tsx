@@ -6,13 +6,37 @@ import { FiAward, FiX, FiZap } from 'react-icons/fi';
 import { ACHIEVEMENTS } from '../domain/achievements';
 import { levelProgress, COMBO_CAP } from '../domain/progress';
 import type { Progress } from '../domain/types';
+import { useSyncStatus } from '../state/hooks';
+import type { SyncStatus } from '../sync/types';
 
 interface ProgressHudProps {
   progress: Progress;
 }
 
+/** Six-pixel dot: the only always-visible sync signal in the shell. */
+function syncDot(status: SyncStatus): { tone: string; title: string } | null {
+  if (!status.configured) return null;
+  switch (status.state) {
+    case 'syncing':
+      return { tone: 'active', title: 'Syncing…' };
+    case 'degraded':
+      return {
+        tone: 'warn',
+        title: `${status.quarantined} change(s) need attention — open Settings`,
+      };
+    case 'error':
+      return { tone: 'error', title: status.error ?? 'Sync failed' };
+    case 'offline':
+      return { tone: 'offline', title: 'Offline — changes are queued' };
+    default:
+      return null;
+  }
+}
+
 export function ProgressHud({ progress }: ProgressHudProps) {
   const [open, setOpen] = useState(false);
+  const sync = useSyncStatus();
+  const dot = syncDot(sync);
   const { level, floor, next } = levelProgress(progress.xp);
   const ratio = next > floor ? Math.min(1, (progress.xp - floor) / (next - floor)) : 0;
   const unlocked = new Set(progress.unlocked);
@@ -48,6 +72,7 @@ export function ProgressHud({ progress }: ProgressHudProps) {
           </svg>
           <span className="hud__level">{level}</span>
         </span>
+        {dot && <span className={`hud__sync hud__sync--${dot.tone}`} title={dot.title} aria-hidden="true" />}
         <span className="hud__meta">
           <span className="hud__streak">
             <FiZap aria-hidden="true" /> {progress.streak}

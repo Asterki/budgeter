@@ -587,10 +587,15 @@ export function SettingsView() {
                   <span className="settings-row__hint">
                     {syncStatus.state === 'syncing'
                       ? 'Syncing…'
-                      : syncStatus.state === 'error'
-                        ? (syncStatus.error ?? 'Sync error')
-                        : 'Up to date'}
+                      : syncStatus.state === 'offline'
+                        ? 'Offline — changes are queued'
+                        : syncStatus.state === 'error'
+                          ? (syncStatus.error ?? 'Sync error')
+                          : syncStatus.state === 'degraded'
+                            ? `${syncStatus.quarantined} change(s) rejected by the relay`
+                            : 'Up to date'}
                     {syncStatus.pending > 0 ? ` · ${syncStatus.pending} queued` : ''}
+                    {syncStatus.skipped > 0 ? ` · ${syncStatus.skipped} skipped` : ''}
                   </span>
                 </div>
                 <span className="settings-row__value">

@@ -2895,6 +2895,37 @@ kbd {
   font-weight: 700;
 }
 
+.hud__sync {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--on-surface-muted);
+}
+
+.hud__sync--active {
+  background: var(--accent);
+  animation: hud-sync-pulse 1s ease-in-out infinite;
+}
+
+.hud__sync--warn {
+  background: var(--warning);
+}
+
+.hud__sync--error {
+  background: var(--danger);
+}
+
+.hud__sync--offline {
+  background: var(--border);
+}
+
+@keyframes hud-sync-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
 .hud__meta {
   display: flex;
   flex-direction: column;

@@ -24,7 +24,18 @@ import type { Settings, Transaction } from '../domain/types';
 import type { HlcClock } from './hlc';
 import type { SyncConfig } from './types';
 
-export function configureRecorder(nextConfig: SyncConfig | null, nextClock: HlcClock | null): void {
+export interface RecorderHooks {
+  /** A local change was queued for the relay. */
+  onLocalWrite?: () => void;
+  /** A local write was gated out because a newer version exists. */
+  onWriteSkipped?: () => void;
+}
+
+export function configureRecorder(
+  nextConfig: SyncConfig | null,
+  nextClock: HlcClock | null,
+  hooks: RecorderHooks = {},
+): void {
   if (!nextConfig || !nextClock) {
     setSyncWriter(null);
     return;
@@ -56,6 +67,8 @@ export function configureRecorder(nextConfig: SyncConfig | null, nextClock: HlcC
       active.lastHlc = hlc;
       await writeSyncState('app', active);
     },
+    onLocalWrite: hooks.onLocalWrite,
+    onWriteSkipped: hooks.onWriteSkipped,
   };
 
   setSyncWriter(writer);

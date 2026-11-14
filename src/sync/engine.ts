@@ -75,8 +75,10 @@ const ENTITY_KINDS: EntityKind[] = [
   'settings',
 ];
 const BATCH = 200;
-const POLL_MS = 10_000;
+const POLL_MS = 5_000;
 const TIMEOUT_MS = 20_000;
+/** A burst of local writes is pushed once, shortly after the last one. */
+const MUTATION_SYNC_MS = 750;
 /** Observed remote clocks are flushed to disk at most this often. */
 const HLC_PERSIST_MS = 1_000;
 /** Upper bound on how long background writers wait for the first sync attempt. */
@@ -88,13 +90,19 @@ const idleStatus: SyncStatus = {
   pending: 0,
   lastSyncAt: 0,
   error: null,
+  quarantined: 0,
+  skipped: 0,
+  fingerprint: '',
 };
 
-let status: SyncStatus = { ...idleStatus };let runtime: { config: SyncConfig; clock: HlcClock } | null = null;
+let status: SyncStatus = { ...idleStatus };
+let runtime: { config: SyncConfig; clock: HlcClock } | null = null;
 let applyHandler: (() => void) | null = null;
 let syncPromise: Promise<SyncResult> | null = null;
 let pollTimer: number | null = null;
 let hlcTimer: number | null = null;
+let mutationTimer: number | null = null;
+let skippedCount = 0;
 let firstPullDone = false;
 /**
  * Bumped whenever the user connects, disconnects or reconnects. Work that
@@ -172,6 +180,18 @@ function createClock(config: SyncConfig): HlcClock {
   return new HlcClock(config.clientId, config.lastHlc, (hlc) =>
     scheduleHlcPersist(config, hlc),
   );
+}
+
+/**
+ * Installs the recorder with the engine's callbacks: a queued local write
+ * schedules a push, and a write that lost the version gate repaints from the
+ * database so the UI cannot keep showing a value that was rejected.
+ */
+function installRecorder(config: SyncConfig, clock: HlcClock): void {
+  configureRecorder(config, clock, {
+    onLocalWrite: noteLocalMutation,
+    onWriteSkipped: () => applyHandler?.(),
+  });
 }
 
 /** Writes any pending clock advance immediately, for page teardown. */
@@ -318,7 +338,7 @@ export async function connectSync(
 
   await writeSyncState('app', config);
   runtime = { config, clock: createClock(config) };
-  configureRecorder(config, runtime.clock);
+  installRecorder(config, runtime.clock);
   publish({ configured: true, state: 'syncing', pending: 0, lastSyncAt: 0, error: null });
 
   try {
@@ -501,11 +521,26 @@ function wake(): void {
   void syncNow();
 }
 
+/**
+ * Called after a local change is queued. The relay is the only way the other
+ * device learns about it, so push soon — but not once per row inside a bulk
+ * import.
+ */
+export function noteLocalMutation(): void {
+  if (!runtime) return;
+  if (mutationTimer !== null) window.clearTimeout(mutationTimer);
+  mutationTimer = window.setTimeout(() => {
+    mutationTimer = null;
+    void syncNow();
+  }, MUTATION_SYNC_MS);
+}
+
 function bindEvents(): void {
   if (bound) return;
   bound = true;
   window.addEventListener('online', wake);
   window.addEventListener('focus', wake);
+  window.addEventListener('pageshow', wake);
   window.addEventListener('pagehide', flushHlc);
   document.addEventListener('visibilitychange', wake);
 }
@@ -515,6 +550,7 @@ function unbindEvents(): void {
   bound = false;
   window.removeEventListener('online', wake);
   window.removeEventListener('focus', wake);
+  window.removeEventListener('pageshow', wake);
   window.removeEventListener('pagehide', flushHlc);
   document.removeEventListener('visibilitychange', wake);
 }
@@ -524,7 +560,7 @@ export function startLoop(): void {
   if (!runtime) return;
   bindEvents();
   pollTimer = window.setInterval(() => {
-    if (document.hidden) return;
+    if (document.visibilityState !== 'visible') return;
     void syncNow();
   }, POLL_MS);
 }
@@ -533,6 +569,10 @@ export function stopLoop(): void {
   if (pollTimer !== null) {
     window.clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (mutationTimer !== null) {
+    window.clearTimeout(mutationTimer);
+    mutationTimer = null;
   }
   unbindEvents();
 }
@@ -545,7 +585,7 @@ export async function loadSyncRuntime(): Promise<void> {
   }
 
   runtime = { config, clock: createClock(config) };
-  configureRecorder(config, runtime.clock);
+  installRecorder(config, runtime.clock);
   // Rows written while sync was off (or while a previous write half-finished)
   // have no outbox entry and would otherwise never reach the relay.
   await reconcileLocalRows();
@@ -608,7 +648,7 @@ export function syncNow(): Promise<SyncResult> {
     return Promise.resolve(idle);
   }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    publish({ state: 'idle', error: 'Offline — changes are queued.' });
+    publish({ state: 'offline', error: 'Offline — changes are queued.' });
     settle();
     return Promise.resolve(idle);
   }
@@ -628,9 +668,14 @@ export function syncNow(): Promise<SyncResult> {
       await writeSyncState('app', runtime.config);
       failures = 0;
       retryAt = 0;
+      const quarantined = (await readQuarantine()).length;
       publish({
-        state: 'idle',
+        // Quarantined changes still need a human: the space is healthy, but it
+        // is not fully in sync either.
+        state: quarantined > 0 ? 'degraded' : 'idle',
         pending: await pendingCount(),
+        quarantined,
+        skipped: skippedCount,
         lastSyncAt: runtime.config.lastSyncAt,
         error: null,
       });
@@ -947,7 +992,11 @@ async function applyRemote(
   // between them would otherwise leave the entity and its version disagreeing.
   return runExclusive(async () => {
     const stored = await getVersion(change.entityType, change.entityId);
-    if (stored && compareHlc(change.hlc, stored.hlc) <= 0) return false;
+    if (stored && compareHlc(change.hlc, stored.hlc) <= 0) {
+      // A newer local version already owns this entity, so the change is stale.
+      skippedCount += 1;
+      return false;
+    }
 
     if (change.deleted) {
       if (change.entityType === 'transaction') {

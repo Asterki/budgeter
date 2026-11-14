@@ -2,6 +2,16 @@
 
 import { useEffect, useState } from 'react';
 
+import { getSyncStatus, subscribeSync } from '../sync/engine';
+import type { SyncStatus } from '../sync/types';
+
+/** Live sync status for the shell chrome. */
+export function useSyncStatus(): SyncStatus {
+  const [status, setStatus] = useState(getSyncStatus);
+  useEffect(() => subscribeSync(setStatus), []);
+  return status;
+}
+
 /** Returns `value` only after it has stopped changing for `delay` ms. */
 export function useDebouncedValue<T>(value: T, delay = 200): T {
   const [debounced, setDebounced] = useState(value);
