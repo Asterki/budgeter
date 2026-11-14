@@ -47,7 +47,7 @@ import {
   SYNC_PROTOCOL_VERSION,
   SYNC_SCHEMA_VERSION,
 } from './protocol';
-import { configureRecorder, entityPayload } from './recorder';
+import { configureRecorder, entityPayload, sameTransferFields, sharedTransferFields } from './recorder';
 import {
   NewSyncSpaceError,
   type ChangesPage,
@@ -620,8 +620,9 @@ export function syncNow(): Promise<SyncResult> {
     try {
       await pushPending(runtime.config, gen);
       if (gen !== generation) return idle;
-      const applied = await pullAll(runtime.config, gen);
+      let applied = await pullAll(runtime.config, gen);
       if (gen !== generation) return idle;
+      applied += await reconcileTransfers();
       await dropSuperseded();
       runtime.config.lastSyncAt = Date.now();
       await writeSyncState('app', runtime.config);
@@ -783,6 +784,81 @@ async function dropSuperseded(): Promise<void> {
     }
   }
   if (stale.length > 0) await removeOutbox(stale);
+}
+
+/* ── Transfers ────────────────────────────────────────────────────────────── */
+
+/**
+ * The two halves of a transfer are independent last-writer-wins rows, so an
+ * edit applied to one leg can leave the pair describing the same movement with
+ * different dates, notes or amounts. Repair copies the winner's shared fields
+ * onto the loser — never the reverse, and only when they actually differ — and
+ * stamps the loser with the *winner's* HLC so neither device can keep declaring
+ * itself newer and the pair converges in one step.
+ */
+export async function reconcileTransfers(): Promise<number> {
+  if (!runtime) return 0;
+
+  return runExclusive(async () => {
+    const legs = (await db.transactions.all()).filter(
+      (transaction) => transaction.transferPairId !== null,
+    );
+    if (legs.length < 2) return 0;
+
+    const byPair = new Map<string, Transaction[]>();
+    for (const leg of legs) {
+      const pairId = leg.transferPairId as string;
+      const group = byPair.get(pairId);
+      if (group) group.push(leg);
+      else byPair.set(pairId, [leg]);
+    }
+
+    let repaired = 0;
+    for (const group of byPair.values()) {
+      if (group.length !== 2) continue;
+      const [a, b] = group;
+      if (sameTransferFields(sharedTransferFields(a), sharedTransferFields(b))) continue;
+
+      const [versionA, versionB] = await Promise.all([
+        getVersion('transaction', a.id),
+        getVersion('transaction', b.id),
+      ]);
+      // Without both versions there is no defensible winner; leave the pair to
+      // the next pull, which will bring one of them.
+      if (!versionA || !versionB) continue;
+
+      const winnerFirst = compareHlc(versionA.hlc, versionB.hlc) >= 0;
+      const winner = winnerFirst ? a : b;
+      const loser = winnerFirst ? b : a;
+      const winnerHlc = winnerFirst ? versionA.hlc : versionB.hlc;
+      const shared = sharedTransferFields(winner);
+
+      // Keep the loser's own direction: an outflow stays an outflow.
+      const sign = Math.sign(loser.amount) || -Math.sign(winner.amount) || -1;
+      const repairedLeg: Transaction = {
+        ...loser,
+        date: shared.date,
+        notes: shared.notes,
+        tags: [...shared.tags],
+        cleared: shared.cleared,
+        amount: sign * shared.magnitude,
+        accountId: winner.transferAccountId ?? loser.accountId,
+        transferAccountId: winner.accountId,
+        updatedAt: Date.now(),
+      };
+
+      await writeEntitySilently('transaction', repairedLeg);
+      await putVersion({
+        entityType: 'transaction',
+        entityId: repairedLeg.id,
+        hlc: winnerHlc,
+        deleted: false,
+        queued: false,
+      });
+      repaired += 1;
+    }
+    return repaired;
+  });
 }
 
 async function pullAll(config: SyncConfig, gen: number): Promise<number> {

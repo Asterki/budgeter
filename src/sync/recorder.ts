@@ -20,7 +20,7 @@ import {
   type OutboxRecord,
   type SyncWriter,
 } from '../db/database';
-import type { Settings } from '../domain/types';
+import type { Settings, Transaction } from '../domain/types';
 import type { HlcClock } from './hlc';
 import type { SyncConfig } from './types';
 
@@ -59,6 +59,40 @@ export function configureRecorder(nextConfig: SyncConfig | null, nextClock: HlcC
   };
 
   setSyncWriter(writer);
+}
+
+/**
+ * The fields both halves of a transfer are expected to hold in common. Sign and
+ * account direction are deliberately excluded: those are what distinguish the
+ * two legs, and comparing them would make every pair look divergent.
+ */
+export interface SharedTransferFields {
+  date: string;
+  notes: string;
+  tags: string[];
+  cleared: boolean;
+  magnitude: number;
+}
+
+export function sharedTransferFields(transaction: Transaction): SharedTransferFields {
+  return {
+    date: transaction.date,
+    notes: transaction.notes,
+    tags: transaction.tags,
+    cleared: transaction.cleared,
+    magnitude: Math.abs(transaction.amount),
+  };
+}
+
+export function sameTransferFields(a: SharedTransferFields, b: SharedTransferFields): boolean {
+  return (
+    a.date === b.date &&
+    a.notes === b.notes &&
+    a.cleared === b.cleared &&
+    a.magnitude === b.magnitude &&
+    a.tags.length === b.tags.length &&
+    a.tags.every((tag, index) => tag === b.tags[index])
+  );
 }
 
 export function entityPayload(kind: EntityKind, value: unknown): unknown {
