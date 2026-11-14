@@ -2,19 +2,20 @@
 
 import { useMemo, useState } from 'react';
 import {
-  FiBarChart2,
-  FiCalendar,
   FiChevronRight,
-  FiCreditCard,
-  FiPieChart,
   FiPlus,
   FiSearch,
   FiSettings,
-  FiTrendingUp,
 } from 'react-icons/fi';
 
 import { useBudget } from '../state/store';
-import type { NavSelection, TransactionScope, ViewKey } from '../state/navigation';
+import {
+  PLANNING_GROUP,
+  VIEW_GROUP,
+  type NavSelection,
+  type TransactionScope,
+  type ViewKey,
+} from '../state/navigation';
 import { formatMoney } from '../domain/money';
 import { accountBalance } from '../domain/money';
 import type { Account } from '../domain/types';
@@ -25,14 +26,6 @@ interface SidebarProps {
   onAddAccount: () => void;
   onEditAccount: (account: Account) => void;
 }
-
-const PRIMARY_VIEWS: { view: ViewKey; label: string; icon: typeof FiPieChart }[] = [
-  { view: 'accounts', label: 'Accounts', icon: FiCreditCard },
-  { view: 'budget', label: 'Budget', icon: FiPieChart },
-  { view: 'calendar', label: 'Calendar', icon: FiCalendar },
-  { view: 'reports', label: 'Reports', icon: FiBarChart2 },
-  { view: 'forecast', label: 'Forecast', icon: FiTrendingUp },
-];
 
 export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: SidebarProps) {
   const { accounts, categories, categoryGroups, payees, transactions, settings } = useBudget();
@@ -104,40 +97,43 @@ export function Sidebar({ selection, onSelect, onAddAccount, onEditAccount }: Si
     <nav className="rail" aria-label="Ledger navigation">
       <div className="rail__scroll">
         <p className="rail__label">Views</p>
-        {PRIMARY_VIEWS.map((item) => {
+        {VIEW_GROUP.map((item) => {
           const Icon = item.icon;
+          const scope = item.scope ?? { kind: 'all' };
           return (
             <button
-              key={item.view}
+              key={item.label}
               type="button"
-              className={`rail__item${
-                selection.view === item.view ? ' rail__item--active' : ''
-              }`}
-              onClick={() => onSelect({ ...selection, view: item.view })}
+              className={`rail__item${isActive(scope) ? ' rail__item--active' : ''}`}
+              onClick={() => selectScope(scope)}
             >
               <Icon aria-hidden="true" />
               <span>{item.label}</span>
+              {scope.kind === 'uncategorized' && (
+                <span className="rail__count">{uncategorizedCount}</span>
+              )}
             </button>
           );
         })}
 
         <div className="rail__section">
-          <p className="rail__label">Ledger</p>
-          <button
-            type="button"
-            className={`rail__item${isActive({ kind: 'all' }) ? ' rail__item--active' : ''}`}
-            onClick={() => selectScope({ kind: 'all' })}
-          >
-            <span>All transactions</span>
-          </button>
-          <button
-            type="button"
-            className={`rail__item${isActive({ kind: 'uncategorized' }) ? ' rail__item--active' : ''}`}
-            onClick={() => selectScope({ kind: 'uncategorized' })}
-          >
-            <span>Uncategorized</span>
-            <span className="rail__count">{uncategorizedCount}</span>
-          </button>
+          <p className="rail__label">Planning</p>
+          {PLANNING_GROUP.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.view}
+                type="button"
+                className={`rail__item${
+                  selection.view === item.view ? ' rail__item--active' : ''
+                }`}
+                onClick={() => onSelect({ ...selection, view: item.view })}
+              >
+                <Icon aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="rail__section">

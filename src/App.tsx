@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
-  FiBarChart2,
-  FiCalendar,
   FiCreditCard,
   FiList,
   FiMoreHorizontal,
   FiPieChart,
   FiPlus,
   FiSettings,
-  FiTrendingUp,
 } from 'react-icons/fi';
 
 import { AccountDialog } from './components/AccountDialog';
@@ -20,7 +17,16 @@ import { TopBar } from './components/TopBar';
 import { TransactionDetail } from './components/TransactionDetail';
 import { monthRange } from './domain/budget';
 import { useBudget } from './state/store';
-import { INITIAL_SELECTION, type NavSelection, type TransactionScope, type ViewKey } from './state/navigation';
+import {
+  INITIAL_SELECTION,
+  MORE_VIEWS,
+  PLANNING_GROUP,
+  VIEW_GROUP,
+  type NavItem,
+  type NavSelection,
+  type TransactionScope,
+  type ViewKey,
+} from './state/navigation';
 import { AccountsView } from './views/AccountsView';
 import { BudgetView } from './views/BudgetView';
 import { CalendarView } from './views/CalendarView';
@@ -30,18 +36,18 @@ import { SettingsView } from './views/SettingsView';
 import { TransactionsView } from './views/TransactionsView';
 import type { Account } from './domain/types';
 
-const TABS: { view: ViewKey; label: string; icon: typeof FiList }[] = [
-  { view: 'transactions', label: 'Ledger', icon: FiList },
+const MOBILE_TABS: { view: ViewKey; label: string; icon: typeof FiList }[] = [
+  { view: 'transactions', label: 'Transactions', icon: FiList },
   { view: 'accounts', label: 'Accounts', icon: FiCreditCard },
   { view: 'budget', label: 'Budget', icon: FiPieChart },
-  { view: 'calendar', label: 'Calendar', icon: FiCalendar },
-  { view: 'reports', label: 'Reports', icon: FiBarChart2 },
-  { view: 'forecast', label: 'Forecast', icon: FiTrendingUp },
-  { view: 'settings', label: 'Settings', icon: FiSettings },
 ];
 
-const MOBILE_TABS = TABS.slice(0, 4);
-const MORE_TABS = TABS.slice(4);
+/** 1–7 follow the rail, not a separate list. */
+const SHORTCUTS: NavItem[] = [
+  ...VIEW_GROUP,
+  ...PLANNING_GROUP,
+  { view: 'settings', label: 'Settings', icon: FiSettings },
+];
 
 export function App() {
   const { ready, transactions, settings } = useBudget();
@@ -98,8 +104,13 @@ export function App() {
         setSearchSignal((value) => value + 1);
       } else if (/^[1-7]$/.test(event.key)) {
         event.preventDefault();
-        const view = TABS[Number(event.key) - 1]?.view;
-        if (view) setSelection((prev) => ({ ...prev, view }));
+        const item = SHORTCUTS[Number(event.key) - 1];
+        if (!item) return;
+        setSelection((prev) => ({
+          ...prev,
+          view: item.view,
+          scope: item.scope ?? prev.scope,
+        }));
       }
     }
 
@@ -165,7 +176,7 @@ export function App() {
           <button
             type="button"
             className={`tabbar__item${
-              MORE_TABS.some((tab) => tab.view === selection.view) ? ' tabbar__item--active' : ''
+              MORE_VIEWS.some((tab) => tab.view === selection.view) ? ' tabbar__item--active' : ''
             }`}
             onClick={() => setMoreOpen(true)}
             aria-expanded={moreOpen}
@@ -218,7 +229,7 @@ export function App() {
               <FiPlus aria-hidden="true" />
               <span>Add transaction</span>
             </button>
-            {MORE_TABS.map((tab) => {
+            {MORE_VIEWS.map((tab) => {
               const Icon = tab.icon;
               return (
                 <button
