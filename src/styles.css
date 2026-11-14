@@ -134,21 +134,23 @@ kbd {
 
 /* ── Shell ───────────────────────────────────────────────────────────────── */
 
-.app-shell {
-  min-height: 100vh;
+.app {
   display: flex;
   flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-.shell-body {
+.app__body {
   flex: 1;
-  display: grid;
-  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  display: flex;
   min-height: 0;
 }
 
 .workspace {
+  flex: 1;
   min-width: 0;
+  overflow-y: auto;
   padding: var(--space-lg);
   border-left: 1px solid var(--border);
   background: var(--canvas);
@@ -270,6 +272,9 @@ kbd {
 .rail {
   display: flex;
   flex-direction: column;
+  width: var(--rail-width);
+  flex: none;
+  height: 100%;
   min-height: 0;
   background: var(--canvas-subtle);
 }
@@ -1359,7 +1364,8 @@ kbd {
 /* ── Mobile tab bar ──────────────────────────────────────────────────────── */
 
 .tabbar {
-  display: none;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
 }
 
 /* ── Placeholder ─────────────────────────────────────────────────────────── */
@@ -1404,14 +1410,6 @@ kbd {
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 860px) {
-  .shell-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rail {
-    display: none;
-  }
-
   .workspace {
     padding: var(--space-md) var(--space-md) calc(var(--tabbar-height) + var(--space-md));
     border-left: 0;

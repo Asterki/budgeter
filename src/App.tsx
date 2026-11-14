@@ -12,6 +12,7 @@ import {
 } from 'react-icons/fi';
 
 import { AccountDialog } from './components/AccountDialog';
+import { AppShell } from './components/AppShell';
 import { Dialog } from './components/Dialog';
 import { Rewards } from './components/Rewards';
 import { Sidebar } from './components/Sidebar';
@@ -130,94 +131,92 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <TopBar
-        accounts={accounts}
-        transactions={transactions}
-        settings={settings}
-        netWorth={worth}
-        onAdd={() => setDetail({ transactionId: null })}
-        onSearch={() => {
-          setSelection((prev) => ({ ...prev, view: 'transactions' }));
-          setSearchSignal((value) => value + 1);
-        }}
-        onToggleTheme={() =>
-          updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
-        }
-        onToggleBalances={() =>
-          updateSettings({ hideBalances: !settings.hideBalances })
-        }
-        onOpenSettings={() => setSelection((prev) => ({ ...prev, view: 'settings' }))}
-      />
-
-      <div className="shell-body">
+    <AppShell
+      topbar={
+        <TopBar
+          accounts={accounts}
+          transactions={transactions}
+          settings={settings}
+          netWorth={worth}
+          onAdd={() => setDetail({ transactionId: null })}
+          onSearch={() => {
+            setSelection((prev) => ({ ...prev, view: 'transactions' }));
+            setSearchSignal((value) => value + 1);
+          }}
+          onToggleTheme={() =>
+            updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
+          }
+          onToggleBalances={() =>
+            updateSettings({ hideBalances: !settings.hideBalances })
+          }
+          onOpenSettings={() => setSelection((prev) => ({ ...prev, view: 'settings' }))}
+        />
+      }
+      rail={
         <Sidebar
           selection={selection}
           onSelect={setSelection}
           onAddAccount={() => setAccountDialog(null)}
           onEditAccount={(account) => setAccountDialog(account)}
         />
-
-        <main className="workspace">
-          {selection.view === 'transactions' && (
-            <TransactionsView
-              selection={selection}
-              onSelectScope={selectScope}
-              onOpenTransaction={(transaction) =>
-                setDetail({ transactionId: transaction.id })
-              }
-              onNewTransaction={() => setDetail({ transactionId: null })}
-              searchSignal={searchSignal}
-              composeSignal={composeSignal}
-              categoryJump={budgetJump}
-            />
-          )}
-          {selection.view === 'accounts' && (
-            <AccountsView
-              onAddAccount={() => setAccountDialog(null)}
-              onEditAccount={(account) => setAccountDialog(account)}
-              onOpenAccount={(account) =>
-                selectScope({ kind: 'account', accountId: account.id })
-              }
-            />
-          )}
-          {selection.view === 'budget' && <BudgetView onOpenCategory={openBudgetCategory} />}
-          {selection.view === 'calendar' && (
-            <CalendarView onOpenTransaction={(transaction) => setDetail({ transactionId: transaction.id })} />
-          )}
-          {selection.view === 'reports' && <ReportsView />}
-          {selection.view === 'forecast' && <ForecastView />}
-          {selection.view === 'settings' && <SettingsView />}
-        </main>
-      </div>
-
-      <nav className="tabbar" aria-label="Primary">
-        {MOBILE_TABS.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.view}
-              type="button"
-              className={`tabbar__item${selection.view === tab.view ? ' tabbar__item--active' : ''}`}
-              onClick={() => setSelection((prev) => ({ ...prev, view: tab.view }))}
-            >
-              <Icon aria-hidden="true" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          className={`tabbar__item${
-            MORE_TABS.some((tab) => tab.view === selection.view) ? ' tabbar__item--active' : ''
-          }`}
-          onClick={() => setMoreOpen(true)}
-          aria-expanded={moreOpen}
-        >
-          <FiMoreHorizontal aria-hidden="true" />
-          <span>More</span>
-        </button>
-      </nav>
+      }
+      tabbar={
+        <nav className="tabbar" aria-label="Primary">
+          {MOBILE_TABS.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.view}
+                type="button"
+                className={`tabbar__item${selection.view === tab.view ? ' tabbar__item--active' : ''}`}
+                onClick={() => setSelection((prev) => ({ ...prev, view: tab.view }))}
+              >
+                <Icon aria-hidden="true" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            className={`tabbar__item${
+              MORE_TABS.some((tab) => tab.view === selection.view) ? ' tabbar__item--active' : ''
+            }`}
+            onClick={() => setMoreOpen(true)}
+            aria-expanded={moreOpen}
+          >
+            <FiMoreHorizontal aria-hidden="true" />
+            <span>More</span>
+          </button>
+        </nav>
+      }
+    >
+      {selection.view === 'transactions' && (
+        <TransactionsView
+          selection={selection}
+          onSelectScope={selectScope}
+          onOpenTransaction={(transaction) => setDetail({ transactionId: transaction.id })}
+          onNewTransaction={() => setDetail({ transactionId: null })}
+          searchSignal={searchSignal}
+          composeSignal={composeSignal}
+          categoryJump={budgetJump}
+        />
+      )}
+      {selection.view === 'accounts' && (
+        <AccountsView
+          onAddAccount={() => setAccountDialog(null)}
+          onEditAccount={(account) => setAccountDialog(account)}
+          onOpenAccount={(account) => selectScope({ kind: 'account', accountId: account.id })}
+        />
+      )}
+      {selection.view === 'budget' && <BudgetView onOpenCategory={openBudgetCategory} />}
+      {selection.view === 'calendar' && (
+        <CalendarView
+          onOpenTransaction={(transaction) => setDetail({ transactionId: transaction.id })}
+        />
+      )}
+      {selection.view === 'reports' && <ReportsView />}
+      {selection.view === 'forecast' && <ForecastView />}
+      {selection.view === 'settings' && <SettingsView />}
 
       {moreOpen && (
         <Dialog title="More" onClose={() => setMoreOpen(false)}>
@@ -272,6 +271,6 @@ export function App() {
       )}
 
       <Rewards settings={settings} />
-    </div>
+    </AppShell>
   );
 }

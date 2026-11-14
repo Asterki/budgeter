@@ -32,7 +32,7 @@ export function TopBar({
   const visibleAccounts = accounts.filter((account) => !account.archived);
 
   return (
-    <header className="topbar">
+    <>
       <div className="topbar__identity">
         <span className="topbar__brand">Budget</span>
         <span className="topbar__meta">Local-first ledger</span>
@@ -110,6 +110,6 @@ export function TopBar({
           <kbd>n</kbd>
         </button>
       </div>
-    </header>
+    </>
   );
 }
