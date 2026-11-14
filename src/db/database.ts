@@ -253,7 +253,7 @@ async function putValue<T>(store: StoreName, value: T, key?: IDBValidKey): Promi
     if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
 
     await writeEntity(store, value, key);
-    await putVersion({ entityType: kind, entityId: id, hlc, deleted: false });
+    await putVersion({ entityType: kind, entityId: id, hlc, deleted: false, queued: true });
     await clearOutboxForEntity(kind, id);
     await putOutbox(writer.toChange(kind, id, value));
     await writer.commitLastHlc(hlc);
@@ -286,7 +286,7 @@ async function putValues<T>(store: StoreName, values: T[]): Promise<{ written: s
 
     await writeEntities(store, accepted.map((entry) => entry.value) as unknown[]);
     for (const entry of accepted) {
-      await putVersion({ entityType: kind, entityId: entry.id, hlc, deleted: false });
+      await putVersion({ entityType: kind, entityId: entry.id, hlc, deleted: false, queued: true });
       await clearOutboxForEntity(kind, entry.id);
       await putOutbox(writer.toChange(kind, entry.id, entry.value));
     }
@@ -312,7 +312,7 @@ async function deleteValue(store: StoreName, key: IDBValidKey): Promise<{ writte
     if (stored && compareHlc(hlc, stored.hlc) <= 0) return { written: [] };
 
     await deleteEntity(store, key);
-    await putVersion({ entityType: kind, entityId: id, hlc, deleted: true });
+    await putVersion({ entityType: kind, entityId: id, hlc, deleted: true, queued: true });
     await clearOutboxForEntity(kind, id);
     await putOutbox(writer.toChange(kind, id, null));
     await writer.commitLastHlc(hlc);
@@ -353,7 +353,7 @@ async function removeMany(store: StoreName, ids: string[]): Promise<{ written: s
     await transactionDone(tx);
 
     for (const id of accepted) {
-      await putVersion({ entityType: kind, entityId: id, hlc, deleted: true });
+      await putVersion({ entityType: kind, entityId: id, hlc, deleted: true, queued: true });
       await clearOutboxForEntity(kind, id);
       await putOutbox(writer.toChange(kind, id, null));
     }
@@ -710,6 +710,13 @@ export interface VersionRecord {
   entityId: string;
   hlc: string;
   deleted: boolean;
+  /**
+   * True while this version is still owed to the relay. Set when a local write
+   * enqueues, cleared once the relay confirms the change. A version that is
+   * still `queued` with no outbox row is a write that crashed between the two
+   * writes, and reconciliation re-enqueues it.
+   */
+  queued?: boolean;
 }
 
 export function entityStore(kind: EntityKind): StoreName {
@@ -748,6 +755,12 @@ export async function putVersion(version: VersionRecord): Promise<void> {
   const tx = database.transaction(SYNC_STORE.versions, 'readwrite');
   tx.objectStore(SYNC_STORE.versions).put(version);
   await transactionDone(tx);
+}
+
+export async function listVersions(): Promise<VersionRecord[]> {
+  const database = await openDatabase();
+  const tx = database.transaction(SYNC_STORE.versions, 'readonly');
+  return request(tx.objectStore(SYNC_STORE.versions).getAll() as IDBRequest<VersionRecord[]>);
 }
 
 export async function listOutbox<T = unknown>(): Promise<OutboxRecord<T>[]> {

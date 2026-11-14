@@ -13,6 +13,7 @@ import {
   deleteEntitySilently,
   getVersion,
   listOutbox,
+  listVersions,
   normalizeAccount,
   normalizeBudget,
   normalizeCategory,
@@ -31,7 +32,6 @@ import {
   writeEntitySilently,
   writeSyncState,
   type EntityKind,
-  type OutboxRecord,
 } from '../db/database';
 import type { Settings, Transaction } from '../domain/types';
 import { mergeProgress } from '../domain/progress';
@@ -338,11 +338,8 @@ export async function disconnectSync(): Promise<void> {
  * Rows are stamped by the caller: epoch for an existing space, real time for
  * a new one.
  */
-async function seedLocal(
-  config: SyncConfig,
-  nextHlc: (kind: EntityKind, value: unknown) => string,
-): Promise<void> {
-  const groups: Array<{ kind: EntityKind; values: unknown[] }> = [
+async function domainGroups(): Promise<Array<{ kind: EntityKind; values: unknown[] }>> {
+  return [
     { kind: 'account', values: await db.accounts.all() },
     { kind: 'categoryGroup', values: await db.categoryGroups.all() },
     { kind: 'category', values: await db.categories.all() },
@@ -353,27 +350,104 @@ async function seedLocal(
     { kind: 'rule', values: await db.rules.all() },
     { kind: 'settings', values: [await db.settings.get()] },
   ];
+}
 
-  for (const group of groups) {
+function entityKey(kind: EntityKind, id: string): string {
+  return `${kind}:${id}`;
+}
+
+function idOf(kind: EntityKind, value: unknown): string | null {
+  if (!value) return null;
+  return kind === 'settings' ? 'app' : ((value as { id?: string }).id ?? null);
+}
+
+async function seedLocal(
+  config: SyncConfig,
+  nextHlc: (kind: EntityKind, value: unknown) => string,
+): Promise<void> {
+  for (const group of await domainGroups()) {
     for (const value of group.values) {
-      const id = group.kind === 'settings' ? 'app' : (value as { id?: string }).id;
-      if (!id) continue;
+      const id = idOf(group.kind, value);
+      if (!id || !value) continue;
       if (await getVersion(group.kind, id)) continue;
 
       const hlc = nextHlc(group.kind, value);
-      const record: OutboxRecord = {
+      await putOutbox({
         changeId: crypto.randomUUID(),
         entityType: group.kind,
         entityId: id,
         hlc,
         deleted: false,
         payload: entityPayload(group.kind, value),
-      };
-      await putOutbox(record);
-      await putVersion({ entityType: group.kind, entityId: id, hlc, deleted: false });
+      });
+      await putVersion({ entityType: group.kind, entityId: id, hlc, deleted: false, queued: true });
       config.lastHlc = hlc;
     }
   }
+}
+
+/**
+ * Re-publishes rows the relay has never seen. Two kinds qualify: rows written
+ * before sync was ever configured (no version at all), and rows whose version
+ * was written but whose outbox row was lost to a closed tab or a crash between
+ * the two writes. The second kind is invisible to every other repair path.
+ */
+export async function reconcileLocalRows(): Promise<number> {
+  const active = runtime;
+  if (!active) return 0;
+  const config = active.config;
+
+  const versions = new Map(
+    (await listVersions()).map((row) => [entityKey(row.entityType, row.entityId), row]),
+  );
+  const queued = new Set(
+    (await listOutbox()).map((row) => entityKey(row.entityType, row.entityId)),
+  );
+  let seeded = 0;
+
+  for (const group of await domainGroups()) {
+    for (const value of group.values) {
+      const id = idOf(group.kind, value);
+      if (!id || !value) continue;
+      const key = entityKey(group.kind, id);
+      const version = versions.get(key);
+
+      if (version) {
+        if (version.queued && !queued.has(key)) {
+          // Reuse the assigned HLC: the row keeps the ordering it was written
+          // with, so a newer edit on this device still supersedes it.
+          await putOutbox({
+            changeId: crypto.randomUUID(),
+            entityType: group.kind,
+            entityId: id,
+            hlc: version.hlc,
+            deleted: version.deleted,
+            payload: version.deleted ? null : entityPayload(group.kind, value),
+          });
+          queued.add(key);
+          seeded += 1;
+        }
+        continue;
+      }
+
+      const hlc = active.clock.next();
+      await putOutbox({
+        changeId: crypto.randomUUID(),
+        entityType: group.kind,
+        entityId: id,
+        hlc,
+        deleted: false,
+        payload: entityPayload(group.kind, value),
+      });
+      await putVersion({ entityType: group.kind, entityId: id, hlc, deleted: false, queued: true });
+      config.lastHlc = hlc;
+      queued.add(key);
+      seeded += 1;
+    }
+  }
+
+  if (seeded > 0) await writeSyncState('app', config);
+  return seeded;
 }
 
 /* ── Loop ─────────────────────────────────────────────────────────────────── */
@@ -428,6 +502,9 @@ export async function loadSyncRuntime(): Promise<void> {
 
   runtime = { config, clock: createClock(config) };
   configureRecorder(config, runtime.clock);
+  // Rows written while sync was off (or while a previous write half-finished)
+  // have no outbox entry and would otherwise never reach the relay.
+  await reconcileLocalRows();
   publish({
     configured: true,
     state: 'idle',
@@ -623,6 +700,7 @@ async function applyRemote(
         entityId: change.entityId,
         hlc: change.hlc,
         deleted: true,
+        queued: false,
       });
       return true;
     }
@@ -642,6 +720,7 @@ async function applyRemote(
       entityId: change.entityId,
       hlc: change.hlc,
       deleted: false,
+      queued: false,
     });
     // If the merge added local-only achievements or counters, publish the union
     // back so the other device receives it too.
