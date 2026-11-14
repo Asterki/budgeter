@@ -20,25 +20,31 @@
   --primary: #1f883d;
   --primary-hover: #1a7f37;
   --on-primary: #ffffff;
+  --secondary: #6e7781;
   --accent: #0969da;
+  --accent-bg: #0969da;
   --danger: #cf222e;
   --success: #1a7f37;
   --warning: #9a6700;
 
   --radius-sm: 4px;
   --radius-md: 6px;
+  --radius-lg: 6px;
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
 
   --overlay: rgba(31, 35, 40, 0.5);
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
+  --shadow-md: 0 8px 24px rgba(31, 35, 40, 0.12);
+  --shadow-lg: 0 12px 32px rgba(31, 35, 40, 0.18);
   --font: 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --mono: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
-  --topbar-height: 56px;
-  --tabbar-height: 58px;
-  --rail-width: 272px;
+  --topbar-height: 52px;
+  --tabbar-height: 60px;
+  --rail-width: 248px;
 }
 
 :root[data-theme='dark'] {
@@ -49,20 +55,25 @@
   --surface: #0d1117;
   --surface-raised: #161b22;
   --surface-variant: #21262d;
-  --on-surface: #e6edf3;
+  --on-surface: #c9d1d9;
   --on-surface-muted: #8b949e;
   --on-surface-disabled: #484f58;
   --border: #30363d;
   --border-subtle: #21262d;
 
-  --primary: #238636;
-  --primary-hover: #2ea043;
+  --primary: #1f883d;
+  --primary-hover: #238636;
+  --secondary: #8b949e;
   --accent: #58a6ff;
+  --accent-bg: #1f6feb;
   --danger: #f85149;
   --success: #3fb950;
   --warning: #d29922;
 
   --overlay: rgba(1, 4, 9, 0.8);
+  --shadow-sm: 0 1px 2px rgba(1, 4, 9, 0.4);
+  --shadow-md: 0 8px 24px rgba(1, 4, 9, 0.45);
+  --shadow-lg: 0 12px 32px rgba(1, 4, 9, 0.55);
 }
 
 *,
@@ -161,7 +172,7 @@ kbd {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 30;
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: var(--space-md);
@@ -1131,7 +1142,7 @@ kbd {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 90;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1145,7 +1156,7 @@ kbd {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.3);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal--dialog {
@@ -1713,7 +1724,7 @@ kbd {
 
 .suggestions {
   position: absolute;
-  z-index: 30;
+  z-index: 45;
   top: calc(100% + 4px);
   left: 0;
   width: min(360px, 100%);
@@ -1722,7 +1733,7 @@ kbd {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.25);
+  box-shadow: var(--shadow-md);
   list-style: none;
 }
 
@@ -2978,20 +2989,20 @@ kbd {
 .hud__backdrop {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 60;
 }
 
 .hud__popover {
   position: absolute;
   right: 0;
   top: calc(100% + 10px);
-  z-index: 71;
+  z-index: 61;
   width: min(340px, calc(100vw - 32px));
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+  box-shadow: var(--shadow-md);
 }
 
 .hud__head {
@@ -3099,7 +3110,7 @@ kbd {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 90;
+  z-index: 320;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3114,7 +3125,7 @@ kbd {
   border-left: 3px solid var(--primary);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 0.3);
+  box-shadow: var(--shadow-md);
   animation: reward-in 180ms ease-out;
 }
 
@@ -3274,7 +3285,7 @@ kbd {
   .reward-stack {
     left: 16px;
     right: 16px;
-    bottom: calc(var(--tabbar-height, 58px) + 16px);
+    bottom: calc(var(--tabbar-height) + 16px + env(safe-area-inset-bottom));
     width: auto;
   }
 
@@ -3460,16 +3471,16 @@ kbd {
   place-items: center;
   width: 48px;
   height: 48px;
-  border: 1px solid var(--primary);
-  border-radius: 6px;
-  background: var(--primary);
+  border: 1px solid var(--accent-bg);
+  border-radius: var(--radius-md);
+  background: var(--accent-bg);
   color: #fff;
   font-size: 20px;
   cursor: pointer;
 }
 
 .fab:hover {
-  background: var(--primary-hover);
+  background: color-mix(in srgb, var(--accent-bg) 88%, #fff);
 }
 
 .fab:active {
@@ -3589,4 +3600,15 @@ kbd {
 .panel__body {
   flex: 1;
   min-height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
