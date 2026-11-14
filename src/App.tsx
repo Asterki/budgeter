@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FiBarChart2,
   FiCalendar,
@@ -19,7 +19,6 @@ import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { TransactionDetail } from './components/TransactionDetail';
 import { monthRange } from './domain/budget';
-import { netWorth } from './domain/ledger';
 import { useBudget } from './state/store';
 import { INITIAL_SELECTION, type NavSelection, type TransactionScope, type ViewKey } from './state/navigation';
 import { AccountsView } from './views/AccountsView';
@@ -45,7 +44,7 @@ const MOBILE_TABS = TABS.slice(0, 4);
 const MORE_TABS = TABS.slice(4);
 
 export function App() {
-  const { ready, accounts, transactions, settings, updateSettings } = useBudget();
+  const { ready, transactions, settings } = useBudget();
   const [selection, setSelection] = useState<NavSelection>(INITIAL_SELECTION);
   const [detail, setDetail] = useState<{ transactionId: string | null } | null>(null);
   const [accountDialog, setAccountDialog] = useState<Account | null | undefined>(undefined);
@@ -108,8 +107,6 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [detail]);
 
-  const worth = useMemo(() => netWorth(accounts, transactions), [accounts, transactions]);
-
   if (!ready) {
     return <div className="boot-screen">Loading your budget…</div>;
   }
@@ -134,22 +131,11 @@ export function App() {
     <AppShell
       topbar={
         <TopBar
-          accounts={accounts}
-          transactions={transactions}
-          settings={settings}
-          netWorth={worth}
           onAdd={() => setDetail({ transactionId: null })}
           onSearch={() => {
             setSelection((prev) => ({ ...prev, view: 'transactions' }));
             setSearchSignal((value) => value + 1);
           }}
-          onToggleTheme={() =>
-            updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
-          }
-          onToggleBalances={() =>
-            updateSettings({ hideBalances: !settings.hideBalances })
-          }
-          onOpenSettings={() => setSelection((prev) => ({ ...prev, view: 'settings' }))}
         />
       }
       rail={

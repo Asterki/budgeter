@@ -5,13 +5,9 @@ import { FiAward, FiX, FiZap } from 'react-icons/fi';
 
 import { ACHIEVEMENTS } from '../domain/achievements';
 import { levelProgress, COMBO_CAP } from '../domain/progress';
-import type { Progress } from '../domain/types';
+import { useBudget } from '../state/store';
 import { useSyncStatus } from '../state/hooks';
 import type { SyncStatus } from '../sync/types';
-
-interface ProgressHudProps {
-  progress: Progress;
-}
 
 /** Six-pixel dot: the only always-visible sync signal in the shell. */
 function syncDot(status: SyncStatus): { tone: string; title: string } | null {
@@ -33,7 +29,9 @@ function syncDot(status: SyncStatus): { tone: string; title: string } | null {
   }
 }
 
-export function ProgressHud({ progress }: ProgressHudProps) {
+export function ProgressHud() {
+  const { settings } = useBudget();
+  const progress = settings.progress;
   const [open, setOpen] = useState(false);
   const sync = useSyncStatus();
   const dot = syncDot(sync);
