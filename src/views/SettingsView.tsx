@@ -14,7 +14,7 @@ import { ACHIEVEMENTS } from '../domain/achievements';
 import { levelProgress } from '../domain/progress';
 import { formatDate, todayISO } from '../domain/date';
 import { describeRecurrence } from '../domain/recurrence';
-import { connectSync, disconnectSync, getSyncInfo, getSyncStatus, syncNow, subscribeSync } from '../sync/engine';
+import { connectSync, disconnectSync, getSyncInfo, getSyncStatus, repairFromSnapshot, syncNow, subscribeSync } from '../sync/engine';
 import { NewSyncSpaceError, type SyncInfo, type SyncStatus } from '../sync/types';
 import type { Account, Category, CategoryGroup, RecurringRule } from '../domain/types';
 
@@ -121,6 +121,27 @@ export function SettingsView() {
     try {
       await syncNow();
       setSyncInfo(await getSyncInfo());
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  async function handleRepair() {
+    setSyncBusy(true);
+    try {
+      const repaired = await repairFromSnapshot();
+      setSyncInfo(await getSyncInfo());
+      setNotice({
+        tone: 'ok',
+        text: repaired
+          ? `Repaired ${repaired} record(s) from the relay.`
+          : 'Nothing to repair — local data already matched the relay.',
+      });
+    } catch (error) {
+      setNotice({
+        tone: 'warn',
+        text: error instanceof Error ? error.message : 'Repair failed.',
+      });
     } finally {
       setSyncBusy(false);
     }
@@ -604,6 +625,25 @@ export function SettingsView() {
                     : 'Not synced yet'}
                 </span>
               </div>
+              <div className="settings-row">
+                <div>
+                  <span className="settings-row__label">Queues</span>
+                  <span className="settings-row__hint">
+                    {syncStatus.pending} pending · {syncStatus.quarantined} quarantined ·{' '}
+                    {syncStatus.skipped} skipped
+                  </span>
+                </div>
+                <span className="settings-row__value">
+                  {syncStatus.fingerprint.slice(0, 12)}
+                </span>
+              </div>
+              {syncStatus.skipped > 0 && (
+                <p className="settings-row__hint">
+                  Skipped records could not be applied — usually because they were
+                  encrypted with a different passphrase. The counts clear only when the
+                  space is repaired or re-paired with the correct key.
+                </p>
+              )}
               <p className="settings-row__hint">
                 Accounts, categories and groups, payees, transactions (both transfer legs),
                 budgets, recurring rules, categorization rules and settings sync automatically.
@@ -616,6 +656,15 @@ export function SettingsView() {
                   onClick={() => void handleSyncNow()}
                 >
                   Sync now
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={syncBusy || syncStatus.state === 'syncing'}
+                  onClick={() => void handleRepair()}
+                  title="Re-read every record from the relay, ignoring local versions"
+                >
+                  Repair from snapshot
                 </button>
                 <button
                   type="button"

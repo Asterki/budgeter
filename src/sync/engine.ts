@@ -102,7 +102,6 @@ let syncPromise: Promise<SyncResult> | null = null;
 let pollTimer: number | null = null;
 let hlcTimer: number | null = null;
 let mutationTimer: number | null = null;
-let skippedCount = 0;
 let firstPullDone = false;
 /**
  * Bumped whenever the user connects, disconnects or reconnects. Work that
@@ -669,13 +668,14 @@ export function syncNow(): Promise<SyncResult> {
       failures = 0;
       retryAt = 0;
       const quarantined = (await readQuarantine()).length;
+      const skipped = (await readSkipped()).length;
       publish({
-        // Quarantined changes still need a human: the space is healthy, but it
-        // is not fully in sync either.
-        state: quarantined > 0 ? 'degraded' : 'idle',
+        // Quarantined or unreadable records still need a human: the space is
+        // healthy, but it is not fully in sync either.
+        state: quarantined > 0 || skipped > 0 ? 'degraded' : 'idle',
         pending: await pendingCount(),
         quarantined,
-        skipped: skippedCount,
+        skipped,
         lastSyncAt: runtime.config.lastSyncAt,
         error: null,
       });
@@ -760,6 +760,50 @@ async function isolatePoisonRows(
 
 async function readQuarantine(): Promise<QuarantinedChange[]> {
   return (await readSyncState<QuarantinedChange[]>('quarantined')) ?? [];
+}
+
+/** A remote record that could not be applied at all. The cursor still moves. */
+interface SkippedChange {
+  changeId: string;
+  reason: 'undecryptable' | 'unknown';
+}
+
+function changeIdOf(change: RemoteChange | RemoteEntity): string {
+  return 'changeId' in change ? change.changeId : `${change.entityType}:${change.entityId}`;
+}
+
+async function readSkipped(): Promise<SkippedChange[]> {
+  return (await readSyncState<SkippedChange[]>('skipped')) ?? [];
+}
+
+async function recordSkipped(changeId: string, reason: SkippedChange['reason']): Promise<void> {
+  const skipped = await readSkipped();
+  if (skipped.some((entry) => entry.changeId === changeId)) return;
+  skipped.push({ changeId, reason });
+  await writeSyncState('skipped', skipped);
+  publish({ skipped: skipped.length, state: 'degraded' });
+}
+
+/**
+ * Rebuilds local state from the relay's snapshot with the version gate off.
+ * This is the escape hatch for the one case the gate cannot fix: local versions
+ * that drifted ahead of the data they describe. Rows the snapshot does not know
+ * about are kept and re-queued, never deleted.
+ */
+export async function repairFromSnapshot(): Promise<number> {
+  if (!runtime) return 0;
+  const config = runtime.config;
+  const gen = generation;
+  const repaired = await runExclusive(async () => {
+    const applied = await snapshotPull(config, gen, true);
+    await writeSyncState('skipped', []);
+    await reconcileLocalRows();
+    return applied;
+  });
+  if (gen !== generation) return 0;
+  publish({ skipped: 0 });
+  applyHandler?.();
+  return repaired;
 }
 
 async function pushPending(config: SyncConfig, gen: number): Promise<void> {
@@ -935,7 +979,7 @@ async function pullAll(config: SyncConfig, gen: number): Promise<number> {
   return applied;
 }
 
-async function snapshotPull(config: SyncConfig, gen: number): Promise<number> {
+async function snapshotPull(config: SyncConfig, gen: number, force = false): Promise<number> {
   let applied = 0;
   let afterType = '';
   let afterId = '';
@@ -959,7 +1003,7 @@ async function snapshotPull(config: SyncConfig, gen: number): Promise<number> {
 
     for (const entity of page.entities) {
       if (gen !== generation) return applied;
-      if (await applyRemote(config, entity, gen)) applied += 1;
+      if (await applyRemote(config, entity, gen, force)) applied += 1;
     }
 
     if (!page.next) break;
@@ -981,10 +1025,14 @@ async function applyRemote(
   config: SyncConfig,
   change: RemoteChange | RemoteEntity,
   gen: number,
+  force = false,
 ): Promise<boolean> {
   // Tasker rows can still exist in an old relay. They are ignored, never merged.
   if ((LEGACY_ENTITY_TYPES as readonly string[]).includes(change.entityType)) return false;
-  if (!ENTITY_KINDS.includes(change.entityType)) return false;
+  if (!ENTITY_KINDS.includes(change.entityType)) {
+    await recordSkipped(changeIdOf(change), 'unknown');
+    return false;
+  }
   if (gen !== generation) return false;
   runtime?.clock.observe(change.hlc);
 
@@ -992,11 +1040,7 @@ async function applyRemote(
   // between them would otherwise leave the entity and its version disagreeing.
   return runExclusive(async () => {
     const stored = await getVersion(change.entityType, change.entityId);
-    if (stored && compareHlc(change.hlc, stored.hlc) <= 0) {
-      // A newer local version already owns this entity, so the change is stale.
-      skippedCount += 1;
-      return false;
-    }
+    if (!force && stored && compareHlc(change.hlc, stored.hlc) <= 0) return false;
 
     if (change.deleted) {
       if (change.entityType === 'transaction') {
@@ -1017,9 +1061,10 @@ async function applyRemote(
     try {
       payload = await decryptPayload<unknown>(change.payload, config.encKey);
     } catch {
-      // A payload from a different passphrase can never decrypt; skip it rather
-      // than blocking every later change behind a poison record.
+      // A payload from a different passphrase can never decrypt; record it
+      // rather than blocking every later change behind a poison record.
       console.warn('Skipping a sync change that could not be decrypted.');
+      await recordSkipped(changeIdOf(change), 'undecryptable');
       return false;
     }
     const mergedSettings = await writeMerged(change.entityType, change.entityId, payload);
@@ -1032,13 +1077,17 @@ async function applyRemote(
     });
     // If the merge added local-only achievements or counters, publish the union
     // back so the other device receives it too.
-    if (mergedSettings) await enqueueSettings(mergedSettings);
+    if (mergedSettings) await enqueueSettings();
     return true;
   });
 }
 
-async function enqueueSettings(settings: Settings): Promise<void> {
+async function enqueueSettings(): Promise<void> {
   if (!runtime) return;
+  // Read at push time, not at queue time: a progress write must never
+  // republish a theme or currency captured before a newer change landed.
+  const stored = await readEntity<Settings>('settings', 'app');
+  if (!stored) return;
   const hlc = runtime.clock.next();
   await clearOutboxForEntity('settings', 'app');
   await putOutbox({
@@ -1047,7 +1096,7 @@ async function enqueueSettings(settings: Settings): Promise<void> {
     entityId: 'app',
     hlc,
     deleted: false,
-    payload: entityPayload('settings', settings),
+    payload: entityPayload('settings', stored),
   });
   await putVersion({ entityType: 'settings', entityId: 'app', hlc, deleted: false });
   runtime.config.lastHlc = hlc;

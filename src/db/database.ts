@@ -170,9 +170,32 @@ const KIND_BY_STORE: Record<StoreName, EntityKind> = {
  * `putVersion`, `putOutbox` and the silent remote writers never re-enter it.
  */
 let queue: Promise<unknown> = Promise.resolve();
+/** Nesting depth of the exclusive section, so an inner call runs inline. */
+let depth = 0;
 
 export function runExclusive<T>(task: () => Promise<T>): Promise<T> {
-  const run = queue.then(task, task);
+  // Re-entrant by design: repair and remote-apply both need to call writers that
+  // take the lock themselves. JavaScript is single-threaded, so a nested call is
+  // already inside the critical section and must run inline or deadlock.
+  if (depth > 0) return task();
+  const run = queue.then(
+    async () => {
+      depth += 1;
+      try {
+        return await task();
+      } finally {
+        depth -= 1;
+      }
+    },
+    async () => {
+      depth += 1;
+      try {
+        return await task();
+      } finally {
+        depth -= 1;
+      }
+    },
+  );
   queue = run.catch(() => undefined);
   return run;
 }
